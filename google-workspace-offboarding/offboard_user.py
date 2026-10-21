@@ -41,8 +41,8 @@ YOU ASSUME ALL RISK ASSOCIATED WITH THE USE OF THIS SOFTWARE.
 
 Author:       Paul Ogier
 Created:      2023-06-22
-Updated:      2026-09-30
-Version:      5.7.1
+Updated:      2026-10-21
+Version:      5.7.2
 Status:       Production
 Python:       3.8+
 Dependencies: GAM ADV X (GAM7), GYB (optional), rclone (optional)
@@ -153,6 +153,17 @@ Changelog
   2026-05-07 - v4.4.0 - Added startup version check against remote VERSION file (CHECK_FOR_UPDATES toggle, fail-silent); restored author/contact header with Outsource House copyright and three Udemy course links; aligned in-script licence reference with the repo LICENSE (Apache 2.0) and added a plain-English summary emphasising attribution retention.
   2026-05-13 - v4.5.0 - BREAKING: renamed --transfer-to to --all-transfer-to. Added per-phase destination flags (--drive-to, --email-to, --alias-to, --calendar-to, --forward-to) that override the global default; precedence is phase-specific > --all-transfer-to > interactive prompt. Added upfront destination resolution and validation before any phase runs: under --force, any non-skipped phase without a resolvable destination aborts the run with a clear error instead of half-offboarding.
   2026-05-14 - v4.6.0 - Added end-of-run MANUAL ACTION block surfacing admin-console instructions for durable mail capture (alias / recipient address map / group) since GAM cannot configure recipient address map and Gmail-level forwarding stops on suspension/deletion; new --forward-alias-to flag explicitly nominates the successor printed in the block (falls back to --forward-to then --all-transfer-to), no automated change is made. Guide gains a "Mail capture after suspension" section and the order-of-operations list flags forwarding's suspension limitation.
+  2026-10-21 - v5.7.2 - Scorched earth no longer deletes the account when the
+                        Shared Drive list cannot be read or parsed; it refuses
+                        (exit 2), as it already did for an unreadable drive ACL.
+                        A --user given as an alias is resolved to its primary
+                        address before any change, so the commands that run
+                        after the alias moves no longer reach the successor.
+                        A missing or unreadable GYB message database fails
+                        backup verification instead of passing as an empty
+                        backup, and the check no longer creates the file. The
+                        update check reads the GoogleWorkspaceScripts
+                        repository. 243 tests.
   2026-09-30 - v5.7.1 - Repository folder renamed from "OffBoarding Google
                         Workspace Users" to google-workspace-offboarding; the
                         startup update check now reads VERSION from the new
@@ -494,7 +505,7 @@ import shutil
 
 # [IMPORTANT] Current local script version. Bumped on each release.
 # Compared against the remote VERSION file to detect updates.
-SCRIPT_VERSION = "5.7.1"
+SCRIPT_VERSION = "5.7.2"
 
 # [OPTIONAL] Check for a newer script version on startup.
 # When True (default), the script makes a single 3-second HTTP request to
@@ -507,7 +518,7 @@ CHECK_FOR_UPDATES = True
 # [OPTIONAL] URL of the remote VERSION file used for update checks.
 # Points to the raw VERSION file on the main branch of the public repo.
 UPDATE_CHECK_URL = (
-    "https://raw.githubusercontent.com/PaulOgier/GAMScripts/main/"
+    "https://raw.githubusercontent.com/PaulOgier/GoogleWorkspaceScripts/main/"
     "google-workspace-offboarding/VERSION"
 )
 
@@ -903,7 +914,7 @@ def check_for_updates():
             )
             print_warning(
                 "What changed + download: "
-                "https://github.com/PaulOgier/GAMScripts/releases   "
+                "https://github.com/PaulOgier/GoogleWorkspaceScripts/releases   "
                 "(git pull if you cloned; set CHECK_FOR_UPDATES = False to "
                 "silence this check)"
             )
@@ -3388,11 +3399,24 @@ def verify_backup_complete(backup_path: Path) -> Tuple[int, int]:
     risk. A genuine shortfall is a summary_error — inside a
     record_failure() context that holds licence removal back, keeping the
     Gmail access a re-download would need. Returns (db_rows, on_disk).
+
+    A DB that is missing or unreadable is a summary_error, not an empty backup:
+    callers detect failure by that count growing, and (0, 0) alone would pass a
+    failed backup as one with no mail. The existence check comes first because
+    sqlite3.connect() would otherwise CREATE the missing file.
     """
+    db_path = backup_path / "msg-db.sqlite"
     try:
-        with _gyb_db(backup_path / "msg-db.sqlite") as db:
+        if not db_path.is_file():
+            raise FileNotFoundError("file does not exist")
+        with _gyb_db(db_path) as db:
             rows = int(db.execute("SELECT count(*) FROM messages").fetchone()[0])
-    except (sqlite3.Error, OSError):
+    except (sqlite3.Error, OSError) as e:
+        print_error(f"Cannot verify the backup: {db_path} is missing or unreadable ({e}).")
+        summary_error(
+            f"Backup at {backup_path} could not be verified: {db_path} is "
+            f"missing or unreadable ({e}). Re-run the backup."
+        )
         return (0, 0)
     on_disk = sum(1 for _ in backup_path.rglob("*.eml"))
     if rows > on_disk:
@@ -3957,7 +3981,9 @@ def check_shared_drives(email: str, dry_run: bool) -> List[str]:
     without another organizer, PLUS those whose membership could not be read.
     An unread ACL is not evidence of safety — treating "we could not check" as
     "nothing to worry about" is the same mistake as reporting it as orphaned,
-    just in the direction that loses the drive.
+    just in the direction that loses the drive. The same holds one level up: a
+    drive LIST that cannot be read or parsed comes back as one entry naming the
+    failure, because an empty list means "no drives" and unlocks the deletion.
     """
     if dry_run:
         print_info("DRY RUN: would check Shared Drive memberships")
@@ -3977,7 +4003,8 @@ def check_shared_drives(email: str, dry_run: bool) -> List[str]:
             f"Could not list Shared Drives for {email}; check by hand whether "
             f"they solely organize any before deleting the account."
         )
-        return []
+        summary_warning(f"Shared Drive check inconclusive for {email}")
+        return [f"Shared Drive list for {email} could not be read"]
 
     try:
         rows = list(csv.DictReader(io.StringIO(
@@ -3991,7 +4018,7 @@ def check_shared_drives(email: str, dry_run: bool) -> List[str]:
             f"before deleting the account."
         )
         summary_warning(f"Shared Drive check inconclusive for {email}")
-        return []
+        return [f"Shared Drive list for {email} could not be parsed"]
 
     organized = [r for r in rows if (r.get("role") or "").lower() == "organizer"]
     if not organized:
@@ -5073,6 +5100,19 @@ def main():
         print_error("User verification failed. Aborting.")
         sys.exit(2)
 
+    # GAM resolves an alias to its user, but the alias itself later moves to the
+    # destination (transfer_aliases), after which every command naming it hits
+    # the DESTINATION's account. Run on the primary address from here on, and
+    # refuse rather than carry on with an input that might be an alias.
+    primary = user_info.get("user", "")
+    if not primary:
+        print_error(f"Could not read the primary address of {user_email}. Aborting.")
+        summary_error(f"Primary address of {user_email} unreadable; refusing to continue")
+        sys.exit(2)
+    if primary.lower() != user_email.lower():
+        print_info(f"{user_email} is an alias; offboarding its primary address {primary}.")
+        user_email = primary
+
     # Privileged roles survive password resets and suspension and become live
     # again if the account is restored or unsuspended. Gate before every
     # possible mutation, including destination checks and temporary unsuspend.
@@ -5215,9 +5255,10 @@ def main():
         if orphans and not args.allow_orphaned_shared_drives:
             print_error(
                 f"Refusing to delete {user_email}: {len(orphans)} Shared "
-                f"Drive(s) listed above are either organized by them ALONE or "
-                f"could not be checked. Deleting the account strands any drive "
-                f"in that list that has no other organizer."
+                f"Drive item(s) listed above are either organized by them "
+                f"ALONE or could not be checked (a drive's membership, or the "
+                f"whole drive list). Deleting the account strands any drive "
+                f"that has no other organizer."
             )
             print_error(
                 "Add a replacement organizer first (the command above runs as "
@@ -5225,7 +5266,7 @@ def main():
                 "with --allow-orphaned-shared-drives to delete anyway."
             )
             summary_error(
-                f"Scorched earth aborted: {len(orphans)} Shared Drive(s) of "
+                f"Scorched earth aborted: {len(orphans)} Shared Drive item(s) of "
                 f"{user_email} are sole-organized or unverifiable"
             )
             finish_run(dry_run)

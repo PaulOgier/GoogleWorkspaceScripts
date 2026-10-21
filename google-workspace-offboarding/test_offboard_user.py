@@ -1604,9 +1604,17 @@ class TestEmailBackupRestore(OffboardTestCase):
         self.assertEqual(offb.verify_backup_complete(self.b), (5, 3))
         self.assertTrue(any("missing" in e for e in offb.summary_errors))
 
-    def test_missing_db_verifies_as_zeroes(self):
-        """Was B6_3."""
+    def test_missing_db_is_an_error_and_is_not_created(self):
+        """Was B6_3: (0, 0) alone passed a failed backup as an empty one, and
+        sqlite3.connect() would have created the missing file."""
         self.assertEqual(offb.verify_backup_complete(self.b / "nope"), (0, 0))
+        self.assertTrue(any("msg-db.sqlite" in e for e in offb.summary_errors))
+        self.assertFalse((self.b / "nope").exists())
+
+    def test_empty_valid_db_verifies_clean(self):
+        msg_db(self.b, [])
+        self.assertEqual(offb.verify_backup_complete(self.b), (0, 0))
+        self.assertFalse(offb.summary_errors)
 
     def test_quarantine_accounted_shortfall_is_clean(self):
         """Was B6_4."""
@@ -1699,6 +1707,46 @@ class TestEmailBackupRestore(OffboardTestCase):
              mock.patch.object(offb, "verify_backup_complete", side_effect=short_verify):
             self.assertFalse(offb.backup_email_only(U, dry_run=False))
         self.assertNotIn("backed up via GYB", self.actions())
+
+    def _backup_email_only_with_db(self, make_db):
+        """Run backup_email_only with a GYB stand-in that leaves `make_db(path)`
+        behind (or nothing, for None); returns (result, the DB path)."""
+        db_path = self.root / "mailboxes" / (
+            f"{U}_email_{datetime.now().strftime('%Y%m%d')}") / "msg-db.sqlite"
+
+        def fake_gyb(args, dry_run=True, **kw):
+            if make_db:
+                make_db(db_path)
+            return True, ""
+
+        with mock.patch.object(offb, "BACKUP_DIRECTORY", self.root), \
+             mock.patch.object(offb, "run_gyb", fake_gyb):
+            return offb.backup_email_only(U, dry_run=False), db_path
+
+    def test_backup_email_only_fails_when_gyb_left_no_db(self):
+        ok, db_path = self._backup_email_only_with_db(None)
+        self.assertFalse(ok)
+        self.assertTrue(any("msg-db.sqlite" in e for e in offb.summary_errors))
+        self.assertFalse(db_path.exists(), "verification must not create the DB")
+
+    def test_backup_email_only_fails_when_db_has_no_messages_table(self):
+        def other_table(path):
+            with offb._gyb_db(path) as db:
+                db.execute("CREATE TABLE unrelated(x)")
+
+        ok, _ = self._backup_email_only_with_db(other_table)
+        self.assertFalse(ok)
+        self.assertTrue(any("could not be verified" in e for e in offb.summary_errors))
+
+    def test_backup_email_only_empty_valid_db_succeeds(self):
+        def empty_messages(path):
+            with offb._gyb_db(path) as db:
+                db.execute("CREATE TABLE messages(message_num INTEGER PRIMARY KEY, "
+                           "message_filename TEXT, message_internaldate TIMESTAMP)")
+
+        ok, _ = self._backup_email_only_with_db(empty_messages)
+        self.assertTrue(ok)
+        self.assertFalse(offb.summary_errors)
 
     def test_backup_email_only_verified_clean_succeeds(self):
         """Was B21_4."""
@@ -1954,9 +2002,13 @@ class TestSharedDrives(OffboardTestCase):
         self.assertEqual(self._check((True, "Got 0 Shared Drives\nUser,id,name,role\n")), [])
         self.assertFalse(offb.summary_warnings)
 
-    def test_gam_failure_never_raises(self):
-        """Was B11_4."""
-        self.assertEqual(self._check((False, "")), [])
+    def test_gam_failure_never_raises_and_blocks(self):
+        """Was B11_4: an unreadable list is not "no drives" -- the scorched-earth
+        gate only blocks a non-empty return."""
+        blockers = self._check((False, ""))
+        self.assertEqual(len(blockers), 1)
+        self.assertIn("could not be read", blockers[0])
+        self.assertTrue(any("inconclusive" in w for w in offb.summary_warnings))
 
     def test_dry_run_makes_no_calls(self):
         """Was B11_5."""
@@ -1974,7 +2026,9 @@ class TestSharedDrives(OffboardTestCase):
 
     def test_unparseable_drive_list_is_not_silence(self):
         """Was B11_7."""
-        self.assertEqual(self._check((True, "garbage")), [])
+        blockers = self._check((True, "garbage"))
+        self.assertEqual(len(blockers), 1)
+        self.assertIn("could not be parsed", blockers[0])
         self.assertTrue(any("inconclusive" in w for w in offb.summary_warnings))
 
     def test_remedy_command_runs_as_the_leaver(self):

@@ -195,6 +195,15 @@ class MainFlowCase(unittest.TestCase):
             # Like the real run_gyb: a dry-run call only logs the command.
             if not dry_run:
                 self.gyb_calls.append(list(args))
+                if "backup" in args and "--local-folder" in args:
+                    # Real GYB always leaves msg-db.sqlite; verification now
+                    # treats a missing one as a failed backup.
+                    folder = Path(args[args.index("--local-folder") + 1])
+                    folder.mkdir(parents=True, exist_ok=True)
+                    with contextlib.closing(sqlite3.connect(folder / "msg-db.sqlite")) as db:
+                        db.execute("CREATE TABLE IF NOT EXISTS messages "
+                                   "(message_filename TEXT, message_internaldate TEXT)")
+                        db.commit()
             return (True, "") if gyb_ok else (False, "gyb failed")
 
         def fake_run(cmd, *a, **kw):
@@ -347,6 +356,31 @@ class TestScorchedEarth(MainFlowCase):
 
     def test_co_organizer_deletes(self):
         gam = self._sole_organizer_gam(ACL_CO_ORGANIZER)
+        code = self.run_main(gam, "--doit", "--force", "--scorched-earth",
+                             "--user", LEAVER, inputs=[LEAVER])
+        self.assertEqual(code, 0, offb.summary_errors)
+        self.assertIn(f"delete user {LEAVER}", gam.argv())
+
+    def _refuses_without_delete(self, listing):
+        gam = ScriptedGam()
+        gam.rule(("user", LEAVER, "print", "shareddrives"), listing)
+        code = self.run_main(gam, "--doit", "--force", "--scorched-earth",
+                             "--user", LEAVER, inputs=[LEAVER])
+        self.assertEqual(code, 2)
+        self.assertFalse(any("delete user" in a for a in gam.argv()))
+        self.assertEqual(gam.writes(), [])
+        self.assertTrue(any("Scorched earth aborted" in e for e in offb.summary_errors))
+
+    def test_failed_shared_drive_listing_refuses(self):
+        self._refuses_without_delete((False, "Failed"))
+
+    def test_unparseable_shared_drive_listing_refuses(self):
+        self._refuses_without_delete((True, "garbage"))
+
+    def test_genuinely_empty_shared_drive_listing_deletes(self):
+        gam = ScriptedGam()
+        gam.rule(("user", LEAVER, "print", "shareddrives"),
+                 (True, "User,id,name,role\nGot 0 Shared Drives\n"))
         code = self.run_main(gam, "--doit", "--force", "--scorched-earth",
                              "--user", LEAVER, inputs=[LEAVER])
         self.assertEqual(code, 0, offb.summary_errors)
@@ -560,6 +594,40 @@ class TestAdminGate(MainFlowCase):
         self.assertEqual(code, 0, offb.summary_errors)
         self.assertIn(f"update user {LEAVER} suspended on", gam.argv())
         self.assertTrue(any("OVERRIDDEN" in w for w in offb.summary_warnings))
+
+
+class TestAliasInput(MainFlowCase):
+    ALIAS = "old.alias@yourdomain.com"
+
+    def test_alias_input_runs_every_write_on_the_primary(self):
+        gam = ScriptedGam()  # `info user <anything> quick` answers "User: LEAVER"
+        gam.rule(("user", LEAVER, "show", "forwardingaddresses"),
+                 (True, f"  Forwarding Address: {SUCCESSOR}, Verification Status: accepted"))
+        code = self.run_main(gam, "--doit", "--force", "--user", self.ALIAS,
+                             "--all-transfer-to", SUCCESSOR)
+        self.assertEqual(code, 0, offb.summary_errors)
+        self.assertIn(f"update user {LEAVER} suspended on", gam.argv())
+        self.assertTrue(gam.writes())
+        for cmd in gam.writes():
+            self.assertNotIn(self.ALIAS, cmd, cmd)
+
+    def test_alias_input_scorched_earth_deletes_the_primary(self):
+        gam = ScriptedGam()
+        code = self.run_main(gam, "--doit", "--force", "--scorched-earth",
+                             "--user", self.ALIAS, inputs=[LEAVER])
+        self.assertEqual(code, 0, offb.summary_errors)
+        self.assertIn(f"delete user {LEAVER}", gam.argv())
+        self.assertFalse(any(self.ALIAS in a for a in gam.argv()
+                             if not a.startswith("info user")))
+
+    def test_unreadable_primary_refuses_before_any_write(self):
+        gam = ScriptedGam()
+        gam.rule(("info", "user", self.ALIAS, "quick"),
+                 (True, "  Settings:\n    Full Name: X\n"))
+        code = self.run_main(gam, "--doit", "--force", "--no-transfer",
+                             "--user", self.ALIAS)
+        self.assertEqual(code, 2)
+        self.assertEqual(gam.writes(), [])
 
 
 class TestFailedReads(MainFlowCase):
