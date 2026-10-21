@@ -13,7 +13,8 @@ permissions:
 jobs:
   package:
     if: startsWith(github.event.release.tag_name, 'gam-script-checker-v')
-    runs-on: ubuntu-latest
+    # ubuntu-latest is 26.04, which has no Python 3.9 to install.
+    runs-on: ubuntu-24.04
     env:
       TAG: ${{ github.event.release.tag_name }}
       GH_TOKEN: ${{ github.token }}
