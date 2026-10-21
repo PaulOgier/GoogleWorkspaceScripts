@@ -2215,6 +2215,52 @@ class TestMonthlyService(CtxTestCase):
         self.assertEqual(["version", "info"], calls)   # nothing after identity
         self.assertIn("NOT C0right", self.ctx.manifest["preflight"][-1][2])
 
+    def stub_gam_for(self, customer_id):
+        def fake_gam(args, **_):
+            if args == ["info", "domain"]:
+                return 0, (f"Customer ID: {customer_id}\n"
+                           "Primary Domain: example.com\n"), ""
+            return 0, "GAM 7.48.22", ""
+        self.patch("locate_gam", lambda: "/usr/bin/gam")
+        self.patch("run_gam", fake_gam)
+        self.patch("https_reachable", lambda host: True)
+
+    def test_resume_against_another_customer_is_refused(self):
+        self.ctx.manifest["meta"]["customer_id"] = "C_OLD"
+        self.ctx.manifest["meta"]["primary_domain"] = "old.example"
+        self.ctx.save()
+        self.stub_gam_for("C_NEW")
+        self.assertFalse(ts.preflight(self.ctx, []))
+        meta = ts.RunContext(self.run_dir, make_args()).manifest["meta"]
+        self.assertEqual("C_OLD", meta["customer_id"])
+        self.assertEqual("old.example", meta["primary_domain"])
+        self.assertIn("NOT C_OLD", self.ctx.manifest["preflight"][-1][2])
+
+    def test_resume_against_the_same_customer_passes(self):
+        self.ctx.manifest["meta"]["customer_id"] = "C_OLD"
+        self.stub_gam_for("C_OLD")
+        self.assertTrue(ts.preflight(self.ctx, []))
+
+    def test_check_that_raises_holds_the_report_and_exits_2(self):
+        self.ctx.manifest["meta"]["complete"] = True
+        self.assertEqual((True, []), ts.delivery_gate(self.ctx))
+
+        def boom(ctx):
+            raise ValueError("bad row")
+        self.patch("CHECKS", [boom])
+        self.patch("CHECK_TITLES", {"boom": "Boom"})
+        findings = ts.run_checks(self.ctx)
+        self.assertEqual(["check-error-boom"], [f.fid for f in findings])
+        ok, reasons = ts.delivery_gate(self.ctx)
+        self.assertFalse(ok)
+        self.assertEqual(["checks did not run: boom"], reasons)
+        self.assertEqual(2, ts.exit_code(self.ctx))
+        # The next run starts clean.
+        self.patch("CHECKS", [])
+        ts.run_checks(self.ctx)
+        self.assertEqual((True, []), ts.delivery_gate(self.ctx))
+        self.assertEqual(0, ts.exit_code(self.ctx))
+
     def test_break_glass_admin_not_dormant_but_listed(self):
         self.write_csv("users", f"""{USERS_HEADER}
 bg@example.com,False,False,Never,True,True,,True,False,Business
@@ -3123,9 +3169,15 @@ class TestTempGrantFailure(CtxTestCase):
                 self.ctx, ts.MODULE_BY_KEY["shareddrive_external"])
         finally:
             ts.run_gam = original
-        self.assertEqual(("empty", 0), (status, rows))
+        self.assertEqual(("partial", 0), (status, rows))
         self.assertIn("lack the necessary license", note)
         self.assertNotIn("UNSCANNED", note)
+
+    def test_partial_from_grant_failure_is_not_rerun_on_resume(self):
+        mod = ts.MODULE_BY_KEY["shareddrive_external"]
+        self.ctx.set_module("shareddrive_external", "partial", 0,
+                            "1 drive(s) not scanned, temp grant failed: x")
+        self.assertFalse(ts._needs_run(self.ctx, mod))
 
 
 class TestSharedDriveScanAsMember(CtxTestCase):
@@ -3243,6 +3295,99 @@ class TestSharedDriveScanAsMember(CtxTestCase):
         status, rows, _ = self.run_with(self.two_step("", listing))
         self.assertEqual(1, len(self.calls))
         self.assertEqual(("empty", 0), (status, rows))
+
+    def two_drives(self, d2_member=False):
+        """D1 has an organizer; D2 has no active member (no grant allowed)."""
+        acls = ("id,permission.emailAddress,permission.role,permission.type\n"
+                "D1,org@example.com,organizer,user")
+        if d2_member:
+            acls += "\nD2,org@example.com,organizer,user"
+        self.write_csv("shareddrives", "id,name\nD1,Finance\nD2,Legal")
+        self.write_csv("shareddriveacls", acls)
+        status, rows, note = self.run_with(
+            self.two_step("id,name\nF1,a.doc\n"))
+        self.ctx.set_module("shareddrive_external", status, rows, note)
+        return status, note
+
+    def test_unscanned_drive_is_partial_and_holds_delivery(self):
+        status, note = self.two_drives()
+        self.assertEqual("partial", status)
+        self.assertIn("UNSCANNED", note)
+        self.ctx.manifest["meta"]["complete"] = True
+        ok, reasons = ts.delivery_gate(self.ctx)
+        self.assertFalse(ok)
+        self.assertIn("shareddrive_external", reasons[0])
+        self.assertEqual(2, ts.exit_code(self.ctx))
+
+    def test_partial_with_unscanned_marker_is_rerun_not_stuck(self):
+        self.two_drives()
+        self.assertTrue(ts._needs_run(
+            self.ctx, ts.MODULE_BY_KEY["shareddrive_external"]))
+
+    def test_all_drives_scanned_stays_ok(self):
+        self.assertEqual("ok", self.two_drives(d2_member=True)[0])
+
+    def test_partial_is_not_checked_and_clean(self):
+        self.two_drives()
+        ts.run_checks(self.ctx)
+        self.assertFalse(any("shareddrive_external" in mods
+                             for _, mods in self.ctx.clean_checks))
+
+
+class TestTempGrantCleanup(CtxTestCase):
+    """The one write the audit makes must be reported when it is not undone."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_csv("users", "primaryEmail,suspended\nsomeone@example.com,False")
+        self.write_csv("shareddrives", "id,name\nD1,Finance")
+        self.write_csv("shareddriveacls",
+                       "id,permission.emailAddress,permission.role,permission.type\n"
+                       "D1,someone@example.com,organizer,user")
+        self.ctx.args.grant_temp_access = True
+        self.ctx.manifest["meta"]["complete"] = True
+
+    def run_collector(self, remove_rc):
+        def fake(args, **kw):
+            if args[1] == "someone@example.com":
+                return 1, "", "Drive Service/App not enabled\n"
+            if "delete" in args:
+                return remove_rc, "", "Delete Failed: boom\n" if remove_rc else ""
+            return 0, "id,name,hasAugmentedPermissions\nF2,b.doc,False\n", ""
+        original = ts.run_gam
+        ts.run_gam = fake
+        try:
+            status, rows, note = ts.collect_sd_external(
+                self.ctx, ts.MODULE_BY_KEY["shareddrive_external"])
+        finally:
+            ts.run_gam = original
+        self.ctx.set_module("shareddrive_external", status, rows, note)
+        return status, note
+
+    def test_failed_removal_is_recorded_gated_and_exit_2(self):
+        status, note = self.run_collector(remove_rc=1)
+        self.assertEqual("empty", status)
+        self.assertEqual([{"drive": "Finance", "id": "D1",
+                           "admin": "admin@example.com"}],
+                         self.ctx.manifest["meta"]["temp_grant_cleanup_failed"])
+        self.assertIn("NOT removed from Finance (D1)", note)
+        ok, reasons = ts.delivery_gate(self.ctx)
+        self.assertFalse(ok)
+        self.assertIn("Finance (D1) for admin@example.com", reasons[0])
+        self.assertEqual(2, ts.exit_code(self.ctx))
+        qa = ts.render_qa(self.ctx, {}, (ok, reasons)).read_text(encoding="utf-8")
+        self.assertIn("Finance (D1) for admin@example.com", qa)
+
+    def test_clean_removal_leaves_the_gate_open(self):
+        self.run_collector(remove_rc=0)
+        self.assertEqual([], self.ctx.manifest["meta"]["temp_grant_cleanup_failed"])
+        self.assertEqual((True, []), ts.delivery_gate(self.ctx))
+        self.assertEqual(0, ts.exit_code(self.ctx))
+
+    def test_earlier_failure_clears_only_when_a_rerun_removes_the_grant(self):
+        self.run_collector(remove_rc=1)
+        self.run_collector(remove_rc=0)
+        self.assertEqual([], self.ctx.manifest["meta"]["temp_grant_cleanup_failed"])
 
 
 class TestLicenceWasteGating(CtxTestCase):

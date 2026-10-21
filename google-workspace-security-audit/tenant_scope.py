@@ -48,8 +48,8 @@ YOU ASSUME ALL RISK ASSOCIATED WITH THE USE OF THIS SOFTWARE.
 
 Author:       Paul Ogier
 Created:      2026-08-15
-Updated:      2026-10-07
-Version:      1.7.1
+Updated:      2026-10-21
+Version:      1.7.2
 Status:       Production
 Python:       3.9+
 Dependencies: GAM ADV X (GAM7) only. Stdlib only on the Python side.
@@ -124,6 +124,14 @@ Notes that matter when reading results:
     in the report where they apply.
 
 Changelog
+  2026-10-21 - v1.7.2 - A --run-dir holding another customer's run is refused
+                        at preflight instead of being resumed under this
+                        tenant. A Shared Drive scan that left drives unscanned
+                        is now partial, so the report is held for review and
+                        the run exits 2. A check that fails to run, or a
+                        temporary organizer grant that could not be removed,
+                        also holds the report and exits 2; the QA report
+                        names the drive and the admin to remove. 294 tests.
   2026-10-07 - v1.7.1 - Rendering error fixed: the report no longer needs
                         JavaScript to open, so a viewer that blocks scripts
                         shows it instead of a blank page. The credit names
@@ -288,7 +296,7 @@ csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 # CONFIGURATION
 ###############################################################################
 
-SCRIPT_VERSION = "1.7.1"
+SCRIPT_VERSION = "1.7.2"
 
 # [OPTIONAL] Startup check against the remote VERSION file. Fail-silent.
 CHECK_FOR_UPDATES = True
@@ -1047,6 +1055,9 @@ class RunContext:
         # checks that ran over real data and raised nothing (for the report).
         self.consulted: List[Tuple[str, bool]] = []
         self.clean_checks: List[Tuple[str, str]] = []
+        # Names of checks that raised: their findings are missing, so the
+        # delivery gate and the exit code must not read the run as complete.
+        self.check_errors: List[str] = []
 
     def save(self):
         self.manifest["meta"]["internal_domains"] = self.internal_domains
@@ -1248,6 +1259,19 @@ def preflight(ctx: RunContext, modules: List[Dict]) -> bool:
             (ctx.run_dir / "domaininfo.txt").write_text(out, encoding="utf-8")
             domain = info.get("primary_domain", "?")
             customer = info.get("customer_id", "?")
+            saved = ctx.manifest["meta"].get("customer_id")
+            if saved and saved != "?" and customer != saved:
+                # --run-dir holds another customer's completed modules, which
+                # a resume would skip and then report as this tenant's.
+                table.append(("Tenant", f"{domain} (customer {customer})",
+                              f"NOT {saved} as this run directory holds; "
+                              "run aborted"))
+                ctx.manifest["preflight"] = [list(r) for r in table]
+                ctx.save()
+                print_error(f"Wrong run directory: GAM answered for "
+                            f"{customer} ({domain}), but {ctx.run_dir} holds "
+                            f"a run for {saved}. Use a new --run-dir.")
+                return False
             ctx.manifest["meta"]["primary_domain"] = domain
             ctx.manifest["meta"]["customer_id"] = customer
             expected = (getattr(args, "tenant_entry", None) or {}).get(
@@ -1735,6 +1759,8 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
     unscanned: List[str] = []
     failed: List[str] = []
     grant_errors: List[str] = []
+    cleanup_failed: List[Dict[str, str]] = []
+    attempted: Set[str] = set()
     errors = 0
 
     def listed(args: List[str]) -> Tuple[bool, str, str]:
@@ -1859,7 +1885,10 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
                  ctx.admin, "adminaccess"],
                 timeout=120, dry_run=ctx.args.dry_run)
             ctx.stderr_log(mod["key"], err)
+            attempted.add(drive_id)
             if not ctx.args.dry_run and rc != 0:
+                cleanup_failed.append({"drive": drive_name, "id": drive_id,
+                                       "admin": ctx.admin})
                 print_error(
                     f"Could not remove the temporary organizer grant on "
                     f"Shared Drive {drive_name} ({drive_id}). Remove "
@@ -1868,6 +1897,11 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
         return "dry-run", 0, ""
     write_rows(ctx.csv_path(mod["key"]), rows)
     ctx.manifest["meta"]["unscanned_shared_drives"] = unscanned
+    # A failure from an earlier attempt stays listed until a later attempt
+    # removes that drive's grant: the leftover organizer is still there.
+    ctx.manifest["meta"]["temp_grant_cleanup_failed"] = [
+        e for e in ctx.manifest["meta"].get("temp_grant_cleanup_failed", [])
+        if e["id"] not in attempted] + cleanup_failed
     note = ""
     not_member = len(unscanned) - len(failed) - len(grant_errors)
     if grant_errors:
@@ -1886,7 +1920,16 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
         # has to know which one to re-run.
         note = (note + "; " if note else "") + \
             f"{len(failed)} drive(s) FAILED mid-scan: {', '.join(failed)}"
-    return ("empty" if not rows else "ok"), len(rows), note
+    if cleanup_failed:
+        note = (note + "; " if note else "") + (
+            "temporary organizer grant NOT removed from "
+            + ", ".join(f"{e['drive']} ({e['id']})" for e in cleanup_failed)
+            + f"; remove {ctx.admin} from their members manually")
+    # Partial when any drive went unscanned, so the gate holds the report and
+    # the checks do not call Shared Drives clean. A resume re-runs it only on
+    # the UNSCANNED marker in the note (see _needs_run), never for the others.
+    status = "partial" if unscanned else ("empty" if not rows else "ok")
+    return status, len(rows), note
 
 
 # ---- DNS ----
@@ -5831,6 +5874,7 @@ def run_checks(ctx: RunContext) -> List[Finding]:
     print_header("STAGE 2 - CHECK")
     findings: List[Finding] = []
     ctx.clean_checks = []
+    ctx.check_errors = []
     ctx.manifest["meta"]["break_glass_seen"] = []
     for check in CHECKS:
         ctx.consulted = []
@@ -5856,6 +5900,7 @@ def run_checks(ctx: RunContext) -> List[Finding]:
             # One broken check must not sink the report; surface it instead.
             print_error(f"Check {check.__name__} failed: "
                         f"{type(exc).__name__}: {exc}")
+            ctx.check_errors.append(check.__name__)
             findings.append(Finding(
                 f"check-error-{check.__name__}", "INFO",
                 f"Internal: check {check.__name__} did not run",
@@ -6254,7 +6299,11 @@ def render_html(ctx: RunContext, findings: List[Finding],
     # must be able to tell "checked and clean" from "not checked", and a
     # partial module from a module that returned nothing at all.
     not_checked = ""
+    unscanned = meta.get("unscanned_shared_drives", [])
     for key, entry in sorted(ctx.manifest["modules"].items()):
+        # The Shared Drive row below names each drive; this one would repeat it.
+        if key == "shareddrive_external" and unscanned:
+            continue
         if entry["status"] in ("skipped", "error", "partial"):
             title = MODULE_BY_KEY.get(key, {}).get("title", key)
             note = entry.get("note", "")
@@ -6282,7 +6331,6 @@ def render_html(ctx: RunContext, findings: List[Finding],
   </tr></thead><tbody>{clean_rows}</tbody></table></div>
 </section>"""
 
-    unscanned = meta.get("unscanned_shared_drives", [])
     if unscanned:
         not_checked += (
             f"<tr><td>Shared Drive external scan</td><td>partial</td>"
@@ -6478,6 +6526,17 @@ def delivery_gate(ctx: RunContext) -> Tuple[bool, List[str]]:
     if broken:
         reasons.append("modules behind critical checks did not complete: "
                        + ", ".join(broken))
+    if ctx.check_errors:
+        reasons.append("checks did not run: " + ", ".join(ctx.check_errors))
+    stale = ctx.manifest["meta"].get("temp_grant_cleanup_failed", [])
+    if stale:
+        reasons.append(
+            "temporary organizer grant NOT removed from: "
+            + "; ".join(f"{e['drive']} ({e['id']}) for {e['admin']}"
+                        for e in stale)
+            + ". Remove that admin from each drive's members in the Admin "
+            "console (Apps > Google Workspace > Drive and Docs > Manage "
+            "shared drives).")
     return not reasons, reasons
 
 
@@ -6486,8 +6545,10 @@ def exit_code(ctx: RunContext) -> int:
     1 (preflight failed) is returned before anything is collected."""
     if shutdown_requested or not ctx.manifest["meta"].get("complete", True):
         return 130
-    if any(e.get("status") in ("error", "partial", "skipped")
-           for e in ctx.manifest["modules"].values()):
+    if (ctx.check_errors
+            or ctx.manifest["meta"].get("temp_grant_cleanup_failed")
+            or any(e.get("status") in ("error", "partial", "skipped")
+                   for e in ctx.manifest["modules"].values())):
         return 2
     return 0
 
