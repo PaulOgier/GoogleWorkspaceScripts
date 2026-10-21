@@ -6,6 +6,7 @@ expect, mode ('exact' or 'floor'), src = GAM7 7.48.07 source citation
 Policy = labels.json policy: what running it on GAM7 7.48.07 does to the tenant.
 A rejected command is CANNOT TELL; floor means the verdict must be at least this severe
 (READ < CHANGES < CANNOT TELL < DESTRUCTIVE < SUSPICIOUS), and an over-warning is accepted.
+'floor+read' is floor plus an explicit acceptance of READ-ONLY (the source note says why); blind_run.py exits 1 on any other under-warning.
 """
 R, C, U, D, S = 'READ-ONLY', 'CHANGES', 'CANNOT TELL', 'DESTRUCTIVE', 'SUSPICIOUS'
 
@@ -176,7 +177,7 @@ CASES = [
     ('I17', 'gam create datatransfer bob@example.com drive alice@example.com', 'shell', C, 'exact', 'create'),
     ('I18', 'gam user bob@example.com print', 'shell', R, 'exact', 'print users default'),
     ('I19', 'gam undelete user bob@example.com', 'shell', C, 'exact', 'undelete'),
-    ('I20', 'gam user bob@example.com delete messages', 'shell', U, 'floor', '75046 missingArgumentExit; nothing runs, but the checker must not say READ-ONLY dry run of nothing... accepted READ too'),
+    ('I20', 'gam user bob@example.com delete messages', 'shell', U, 'floor+read', '75046 missingArgumentExit; nothing runs, but the checker must not say READ-ONLY dry run of nothing... accepted READ too'),
     ('I21', 'gam update group', 'shell', U, 'floor', 'incomplete'),
     ('I22', 'gam print users todrive', 'shell', C, 'exact', 'policy todrive'),
     ('I23', 'gam user bob@example.com delete messages ids 123,456', 'shell', D, 'exact', '75318 ids skip the doit gate'),
@@ -186,6 +187,11 @@ CASES = [
     ('I27', 'gam select prod delete user bob@example.com', 'shell', D, 'exact', 'delete user'),
     ('I28', 'gam redirect stdout - multiprocess redirect stderr stdout delete user bob@example.com', 'shell', D, 'exact', 'delete user'),
     ('I29', 'gam update group sales@example.com sync member preview file u.txt', 'shell', R, 'exact', '35622'),
+    ('I30', 'gam print users\necho "$(gam delete user victim@example.com)"', 'shell', D, 'exact', 'echo runs the substitution first'),
+    ('I31', 'gam print users\necho `gam delete user victim@example.com`', 'shell', D, 'exact', 'backtick substitution in a bare echo'),
+    ('I32', 'gam print users\necho \'$(gam delete user victim@example.com)\'', 'shell', R, 'exact', 'single quotes make it literal text'),
+    ('I33', 'gam print users\necho "gam delete user victim@example.com"', 'shell', R, 'exact', 'echoed text, no substitution'),
+    ('I34', 'gam print users\nx="$(gam delete user victim@example.com)"', 'shell', U, 'floor', 'assignment of a substitution: handed to another program, not read'),
     # --- J. Python
     ('J1', 'import subprocess\nsubprocess.run("gam print users > u.csv && gam delete user bob@example.com", shell=True)', 'python', D, 'floor', 'delete user after &&'),
     ('J2', 'import os, subprocess\nsubprocess.run(["gam", "print", "users"])\nos.system("cd /opt && gam delete user bob@example.com")', 'python', D, 'floor', 'delete user after cd &&'),
@@ -195,6 +201,9 @@ CASES = [
     ('J6', 'import os, subprocess\nGAM = os.environ.get("GAM", "gam")\nsubprocess.run([GAM, "delete", "user", "bob@example.com"])', 'python', D, 'exact', 'delete user'),
     ('J7', 'import subprocess\nGAM = "/usr/local/bin/gam"\nd = "abc"\nsubprocess.run(f"{GAM} update mobile {d} action wipe doit".split())', 'python', D, 'exact', '33977; 34060'),
     ('J8', 'import subprocess\nsubprocess.run("gam user bob@example.com delete messages query \'x\' doit", shell=True)', 'python', D, 'exact', '75325'),
+    ('J9', 'import subprocess\nsubprocess.run(["gam", "print", "users"])\nexec("import os; os.system(\'gam delete user victim@example.com\')")', 'python', D, 'exact', 'exec of a constant is parsed and read'),
+    ('J10', 'import subprocess\nsubprocess.run(["gam", "print", "users"])\nexec("gam delete user victim@example.com")', 'python', U, 'floor', 'constant exec text that is not Python'),
+    ('J11', 'import subprocess\nsubprocess.run(["gam", "print", "users"])\neval("__import__(\'os\').system(\'gam delete user victim@example.com\')")', 'python', U, 'floor', 'eval of a constant is not read'),
     # --- K. gam batch files
     ('K1', 'gam print users\ngam delete user bob@example.com', 'gambatch', D, 'exact', 'delete user'),
     ('K2', 'gam print users\nexecute rm -rf /tmp/gamwork', 'gambatch', D, 'exact', 'local rm -rf'),

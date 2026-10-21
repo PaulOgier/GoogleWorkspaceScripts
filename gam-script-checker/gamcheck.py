@@ -38,8 +38,8 @@ YOU ASSUME ALL RISK ASSOCIATED WITH THE USE OF THIS SOFTWARE.
 
 Author:       Paul Ogier
 Created:      2026-09-13
-Updated:      2026-10-01
-Version:      0.4.3
+Updated:      2026-10-21
+Version:      0.4.4
 Status:       Pre-release
 Python:       3.9+
 Dependencies: None. Stdlib only; never runs gam or the script it checks.
@@ -72,7 +72,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
-__version__ = '0.4.3'
+__version__ = '0.4.4'
 
 HERE = Path(__file__).resolve().parent
 VERBS_DIR = HERE / 'verbs'
@@ -1094,6 +1094,14 @@ class Checker:
                 seg = self._drop_redirects(seg)
                 at = self._gam_position(seg, gam_vars, wrappers)
                 if at is None:
+                    if seg and seg[0].lower().strip('`"\'') in ECHO_WORDS and lang in ('shell', 'gambatch', 'powershell'):
+                        # echo "$(gam delete ...)" prints text but the shell runs the substitution first
+                        for inner in self._substitutions(body, lang):
+                            if inner in ' '.join(seg):
+                                for f in self.check_text(inner, ctx.file, lang, ctx.base_dirs, ctx.depth + 1):
+                                    f.line = n
+                                    f.note = '; '.join(x for x in (f.note, 'run by a command substitution inside echo/printf') if x)
+                                    findings.append(f)
                     if self._gam_hidden(seg, gam_vars, wrappers):
                         findings.append(Finding(ctx.file, n, UNKNOWN, 'gam appears in a command the checker could not follow',
                                                 short(seg), note='handed to another program (bash -c, ssh, Start-Process); check the inner command on its own'))
@@ -1111,6 +1119,36 @@ class Checker:
             findings.append(Finding(ctx.file, 0, UNKNOWN, f'no gam commands found in {len(lines)} lines',
                                     note='if this script does run gam, the checker could not see how'))
         return findings
+
+    @staticmethod
+    def _substitutions(line, lang):
+        """Text inside each $(...) and `...` on a line that the shell would run: not single-quoted, not escaped.
+
+        shortcut: parentheses are counted without reading quotes inside a substitution; upgrade if one hides a real case.
+        """
+        out, i, quote = [], 0, ''
+        while i < len(line):
+            c = line[i]
+            if c == '\\' and quote != "'" and lang != 'powershell':
+                i += 2
+                continue
+            if c in '\'"' and quote in ('', c):
+                quote = '' if quote else c
+            elif quote != "'" and line.startswith('$(', i):
+                depth, j = 1, i + 2
+                while j < len(line) and depth:
+                    depth += (line[j] == '(') - (line[j] == ')')
+                    j += 1
+                out.append(line[i + 2:j - 1 if depth == 0 else j])
+                i = j
+                continue
+            elif c == '`' and quote != "'" and lang != 'powershell':
+                j = line.find('`', i + 1)
+                j = len(line) if j < 0 else j
+                out.append(line[i + 1:j])
+                i = j
+            i += 1
+        return out
 
     @staticmethod
     def _gam_hidden(seg, gam_vars, wrappers):
@@ -1498,6 +1536,7 @@ class _PythonReader:
         if name in PY_LOCAL or (name.endswith('.unlink') and not name.startswith('os.')):
             level, what = PY_LOCAL.get(name, (CHANGES, 'deletes a local file'))
             if name in ('eval', 'exec', 'compile') and node.args and isinstance(node.args[0], ast.Constant):
+                self._constant_code(node, name)
                 return
             self.findings.append(Finding(self.ctx.file, node.lineno, level, what, ast.unparse(node)[:140],
                                          note='on this computer'))
@@ -1533,6 +1572,27 @@ class _PythonReader:
         if not found and any(isinstance(t, Dyn) for t in toks[:1]):
             found = [Finding(self.ctx.file, line, UNKNOWN, 'runs a program chosen at runtime', short(toks))]
         self.findings.extend(found)
+
+    def _constant_code(self, node, name):
+        """exec/compile of a literal string: parse it as Python (never run it) and read it like the rest of the file.
+
+        eval is not read, and text that does not parse is not guessed at; both are CANNOT TELL.
+        """
+        src = node.args[0].value
+        tree = None
+        if name != 'eval' and isinstance(src, (str, bytes)):
+            try:
+                tree = ast.parse(src)
+            except (SyntaxError, ValueError):
+                pass
+        if tree is None:
+            self.findings.append(Finding(self.ctx.file, node.lineno, UNKNOWN, f'runs Python text the checker could not read ({name})',
+                                         ast.unparse(node)[:140], note='could be gam or anything else'))
+            return
+        for f in _PythonReader(tree, self.checker, self.ctx).run():
+            f.line = node.lineno
+            f.note = '; '.join(n for n in (f.note, f'inside {name}()') if n)
+            self.findings.append(f)
 
     def _wrapper_call(self, node, name):
         prefix, splat, arg_names, _ = self.wrappers[name]

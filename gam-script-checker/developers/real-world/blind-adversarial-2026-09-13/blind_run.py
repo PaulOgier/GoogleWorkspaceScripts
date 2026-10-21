@@ -1,4 +1,6 @@
-"""Run blind_set.py through gamcheck and score it. Usage: blind_run.py /path/to/gamcheck.py"""
+"""Run blind_set.py through gamcheck and score it. Usage: blind_run.py /path/to/gamcheck.py
+
+Exit 1 when any case is under-warned or crashed, else 0."""
 import contextlib
 import io
 import sys
@@ -36,11 +38,12 @@ for cid, text, lang, expect, mode, src in CASES:
     except Exception:
         crash.append((cid, text, traceback.format_exc().splitlines()[-1]))
         continue
+    floor = mode.startswith('floor')
     if got == expect:
         ok.append(cid)
-    elif mode == 'floor' and SEV[got] >= SEV[expect]:
+    elif floor and (SEV[got] >= SEV[expect] or (mode == 'floor+read' and got == 'READ-ONLY')):
         ok.append(cid)
-    elif got == 'CANNOT TELL' and mode == 'floor':
+    elif got == 'CANNOT TELL' and floor:
         honest.append(cid)  # score.py policy: CANNOT TELL is never an under-warning, it tells the reader to look
     elif SEV[got] < SEV[expect] and not (expect == 'CANNOT TELL' and got in ('READ-ONLY', 'CHANGES') and mode == 'exact'):
         under.append((cid, text, expect, got, src, detail))
@@ -55,3 +58,4 @@ for label, rows in (('UNDER', under), ('OVER/OTHER', over)):
 print('\n== CRASH')
 for row in crash:
     print(row)
+sys.exit(1 if under or crash else 0)  # the release gate: an under-warning or a crash fails the run

