@@ -299,7 +299,7 @@ def test_checker_is_inert():
     """gamcheck itself imports nothing that runs programs or opens the network, and calls no exec/eval."""
     import ast
     tree = ast.parse((ROOT / 'gamcheck.py').read_text(encoding='utf-8'))
-    allowed = {'argparse', 'ast', 'csv', 'json', 're', 'shlex', 'sys', 'dataclasses', 'pathlib', 'readline',
+    allowed = {'argparse', 'fnmatch', 'ast', 'csv', 'json', 're', 'shlex', 'sys', 'dataclasses', 'pathlib', 'readline',
                'contextlib', 'io'}
     imported = set()
     for node in ast.walk(tree):
@@ -474,6 +474,82 @@ def test_invariants(checker):
         assert g.tenant_unguarded(checker.check_text(script, '<t>', 'shell'), '<t>') == expect, script
 
 
+def test_modes(checker):
+    """A followed script run with a mode argument is judged by the branch that mode runs.
+
+    Lines in other modes' branches are set aside as not run; anything the checker cannot read
+    about the mode counts every line, so the verdict is never milder than the script.
+    """
+    def run(name, *args):
+        line = ' '.join(['bash', f'"{FIXTURES / name}"', *args]) + '\n'  # quoted: a Windows path's backslashes
+        found = checker.check_text(line, '<p>', 'shell')
+        counted = [f for f in found if f.command.startswith('gam') and not f.aside]
+        notes = [f.what for f in found if f.aside == 'note']
+        return g.verdict(found), counted, notes
+
+    v, counted, _ = run('modes_if.sh', 'check')
+    assert v == g.READ and len(counted) == 4, counted
+    v, counted, _ = run('modes_if.sh')  # no argument: the ${1:-check} default
+    assert v == g.READ, counted
+    v, counted, _ = run('modes_if.sh', 'create')
+    assert v == g.CHANGES and sum('creates user' in f.what for f in counted) == 2, counted
+    assert not any('group' in f.what for f in counted), counted
+    v, counted, _ = run('modes_if.sh', 'finish')
+    assert v == g.CHANGES and sum('adds members' in f.what for f in counted) == 2, counted
+    assert not any('creates user' in f.what for f in counted), counted
+    v, counted, _ = run('modes_if.sh', 'typo')
+    assert v == g.READ, counted
+
+    assert run('modes_case.sh', 'check')[0] == g.READ
+    assert run('modes_case.sh', 'remove')[0] == g.DESTRUCTIVE
+    assert run('modes_case.sh')[0] == g.READ  # "$1" empty: only the *) branch
+
+    assert run('modes_nested.sh')[0] == g.READ
+    assert run('modes_nested.sh', 'apply')[0] == g.CHANGES
+    assert run('modes_nested.sh', 'apply', 'wipe')[0] == g.DESTRUCTIVE
+
+    v, _, notes = run('modes_unresolved.sh', 'check')
+    assert v == g.DESTRUCTIVE and any('every line counted' in x for x in notes), notes
+    v, _, notes = run('modes_if.sh', '"$WHICH"')  # mode decided at runtime
+    assert v == g.CHANGES and any('every line counted' in x for x in notes), notes
+
+    def text(src, *args):
+        return g.verdict(checker.check_text(src, '<t>', 'shell', argv=list(args)))
+    dangerous = 'gam info domain\nif [ "$MODE" = check ]; then\n  gam print users\nelse\n  gam delete user x@example.com\nfi\n'
+    assert text('MODE=$1\n' + dangerous, 'check') == g.READ
+    for prefix in ('MODE=$1\nMODE=delete\n', 'MODE=$1\nshift\n', 'read MODE\n', 'f() {\n  MODE=$1\n}\n'):
+        assert text(prefix + dangerous, 'check') == g.DESTRUCTIVE, prefix
+    assert text('MODE=$1\n[ "$MODE" = check ] || gam delete user x@example.com\n', 'check') == g.DESTRUCTIVE
+    assert text('MODE=$1\n"$MODE"\n' + dangerous, 'check') == g.DESTRUCTIVE
+    guard = 'MODE=${1:-}\ncase "$MODE" in check|go) ;; *) echo usage; exit 1;; esac\n'
+    assert text(guard + dangerous, 'check') == g.READ  # a one-line usage guard does not block the reading
+    assert text(guard + dangerous, 'go') == g.DESTRUCTIVE
+    # spellings the branch reader must not misread (each would hide the delete if it did)
+    d, r = 'gam delete user x@example.com', 'gam print users'
+    for src, args in (
+            (f'MODE=$1\nif [ "$MODE" = go ]; then\n  {r}; else\n  {d}\nfi\n', ['check']),
+            (f'MODE=$1\ncase "$MODE" in\n  check)\n    if [ -f x ]; then\n      {r}\n    fi;;\n  go)\n    {d}\n    ;;\nesac\n', ['go']),
+            (f'MODE=$1\ncase "$MODE" in\n  go)\n    {r}\n    ;&\n  check)\n    {d}\n    ;;\nesac\n', ['go']),
+            (f'MODE=$1\ncase "$MODE" in\n  check) {r} ;; go) {d} ;;\nesac\n', ['go']),
+            (f'MODE=$1\nif [[ "$MODE" == "c*" ]]; then\n  {r}\nelse\n  {d}\nfi\n', ['check']),
+            (f'MODE=$1\ncase "$MODE" in\n  "c*") {r} ;;\n  *) {d} ;;\nesac\n', ['check']),
+            (f'MODE=$1\nD=check\ncase "$MODE" in\n  "$D") {d} ;;\n  *) {r} ;;\nesac\n', ['check']),
+            (f'MODE=$1\ncat <<EOF\nif [ "$MODE" = go ]; then\nEOF\n{d}\ncat <<EOF\nfi\nEOF\n', ['check']),
+            (f'MODE=$1\n: "${{MODE:=delete}}"\ncase "$MODE" in\n  delete) {d} ;;\n  *) {r} ;;\nesac\n', []),
+            (f'[ "$1" = -v ] && {{ shift; }}\nMODE=$1\ncase "$MODE" in\n  go) {d} ;;\n  *) {r} ;;\nesac\n', ['-v', 'go']),
+            (f'f() {{\n  if [ "$MODE" = check ]; then\n    {r}\n  else\n    {d}\n  fi\n}}\nf\nMODE=$1\n', ['check']),
+            (f'MODE=$1\ncase "$MODE" in\n  check)\n    if [ -f x ]; then {r}; fi;;\n  go)\n    {d}\n    ;;\nesac\n', ['go']),
+            (f'MODE=$1\nshopt -s nocasematch\ncase "$MODE" in\n  check) {r} ;;\n  go) {d} ;;\nesac\n', ['GO']),
+            (f'MODE=$1\nprintf -v MODE go\nif [ "$MODE" = check ]; then\n  {r}\nelse\n  {d}\nfi\n', ['check']),
+            (f'MODE=$1\nbuiltin read MODE\nif [ "$MODE" = check ]; then\n  {r}\nelse\n  {d}\nfi\n', ['check']),
+            (f'T=${{2:-none}}\ncase "$T" in\n  none)\n    {d}\n    ;;\n  *) {r} ;;\nesac\n', ['apply', '>', 'log'])):
+        assert text(src, *args) == g.DESTRUCTIVE, src
+    # unrelated conditions are kept, not guessed
+    assert text('MODE=$1\nif [ -f x ]; then\n  gam delete user x@example.com\nfi\n', 'check') == g.DESTRUCTIVE
+    # checked on its own, the whole file still counts
+    assert g.verdict(checker.check_file(FIXTURES / 'modes_if.sh')) == g.CHANGES
+
+
 def main():
     checker = g.Checker()
     n = test_fixture_verdicts(checker)
@@ -487,7 +563,8 @@ def main():
     test_no_false_read_only(checker)
     test_paste()
     test_invariants(checker)
-    print(f'ok: {n} fixtures, details, verb coverage, positive control, paste, gates, adversarial, inert, invariants')
+    test_modes(checker)
+    print(f'ok: {n} fixtures, details, modes, verb coverage, positive control, paste, gates, adversarial, inert, invariants')
 
 
 if __name__ == '__main__':

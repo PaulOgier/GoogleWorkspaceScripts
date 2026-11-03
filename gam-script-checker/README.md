@@ -223,6 +223,8 @@ A command written for GAMADV-XTD3 or legacy GAM that GAM7 no longer accepts is n
 
 A line that runs another script (`python3 audit.py`, `bash ./offboard.sh`, `pwsh -File x.ps1`, `./x.sh`) is followed into that script when it exists on this computer, so a one-line paste that starts a script gets the script's verdict. `~` and `$HOME` are expanded; a path built from any other variable, or a script that is not there, reads as CANNOT TELL.
 
+A shell script run with a mode word (`bash runbook.sh check`) is judged by the lines that mode runs. When the script reads the mode from its arguments (`MODE="${1:-check}"` or `$1` itself) and picks a branch with a plain compare (`if [ "$MODE" = "check" ]`, `case "$MODE" in check)`), the gam lines in the other branches are listed under NOT RUN IN THIS MODE and left out of the verdict. With no mode word, the default after `:-` is used. If the mode is tested any other way (a pattern, `&&`, a second assignment, `shift`, a mode decided at runtime), every line counts and a NOTE says why. Checked on its own (`gamcheck.py runbook.sh`), the whole script counts.
+
 ## Exit codes
 
 For use in other scripts: the exit code is the verdict.

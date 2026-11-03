@@ -38,8 +38,8 @@ YOU ASSUME ALL RISK ASSOCIATED WITH THE USE OF THIS SOFTWARE.
 
 Author:       Paul Ogier
 Created:      2026-09-13
-Updated:      2026-10-21
-Version:      0.4.4
+Updated:      2026-11-03
+Version:      0.4.5
 Status:       Pre-release
 Python:       3.9+
 Dependencies: None. Stdlib only; never runs gam or the script it checks.
@@ -65,6 +65,7 @@ at runtime is reported as CANNOT TELL rather than guessed.
 import argparse
 import ast
 import csv
+import fnmatch
 import json
 import re
 import shlex
@@ -72,7 +73,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
-__version__ = '0.4.4'
+__version__ = '0.4.5'
 
 HERE = Path(__file__).resolve().parent
 VERBS_DIR = HERE / 'verbs'
@@ -323,6 +324,7 @@ class Finding:
     note: str = ''
     undo: str = ''
     docs: str = ''
+    aside: str = ''  # 'not-run': in a branch the script's mode argument rules out; 'note': a remark. Neither counts.
 
     def as_dict(self):
         """Serialise for --json, with the level spelled out."""
@@ -922,7 +924,7 @@ class Context:
         return [Finding(self.file, line, UNKNOWN, f'runs every gam command in {file_tok}, which was not provided',
                         command, note='check that file too: gamcheck.py ' + file_tok)]
 
-    def follow_script(self, script_tok, line, command):
+    def follow_script(self, script_tok, line, command, seg=()):
         """Check a script the line runs (python3 x.py, bash x.sh), if it exists on this computer.
 
         ~ and the home-folder variables are expanded to the checker's own home folder, which is
@@ -940,9 +942,13 @@ class Context:
                             note='check that file too: gamcheck.py ' + script_tok)]
         if self.depth >= 3:
             return [Finding(self.file, line, UNKNOWN, f'scripts nested too deeply at {p.name}', command)]
-        inner = self.checker.check_file(p, depth=self.depth + 1)
+        at = next((i for i, t in enumerate(seg) if t.strip('`"\'') == script_tok), None)
+        argv = [t for t in seg[at + 1:]] if at is not None else None
+        inner = self.checker.check_file(p, depth=self.depth + 1, argv=argv)
         for f in inner:
             f.note = '; '.join(n for n in (f.note, f'from {p.name} run at {self.file} line {line}') if n)
+        if any(f.command.startswith('gam') for f in inner) and all(f.aside for f in inner if f.command.startswith('gam')):
+            inner.append(Finding(self.file, line, READ, f'runs {p.name} in a mode that runs no gam commands', command))
         if not any(f.command.startswith('gam') for f in inner):
             inner.append(Finding(self.file, line, UNKNOWN, f'runs {p.name}, where no gam commands were found', command,
                                  note='if that script does run gam, the checker could not see how'))
@@ -1014,6 +1020,232 @@ def _tokenise(line, lang):
     return toks
 
 
+
+MODE_ASSIGN = re.compile(r'([A-Za-z_]\w*)=\$(?:([1-9])|\{([1-9])(?:(:?-)([^}]*))?\})')
+VAR_REF = re.compile(r'\$\{?([A-Za-z_]\w*|[1-9])')
+
+
+def _mode_scope(lines, argv):
+    """Lines of a shell script that its mode argument rules out, and a note saying what was read.
+
+    Resolves MODE="${1:-default}" (or a bare $1) from the arguments the script was run with and
+    evaluates literal compares, [ "$MODE" = word ] and case "$MODE" in word), so the gam lines of
+    the other modes are not counted. An if, elif or case on the mode that cannot be read (a pattern,
+    &&, a second assignment, shift) means every line counts, and the note says why. A one-line
+    guard ([ "$MODE" = x ] || exit, a one-line case) only ever counts its own line, so it is kept.
+    Returns (set of dead line numbers, note); the note is '' when nothing tests an argument.
+    """
+    toks = {n: _tokenise(line.strip(), 'shell') for n, line in lines}
+
+    # a function's $1 is its own argument, not the script's
+    in_func, close = set(), None
+    for n, line in lines:
+        if close is not None:
+            in_func.add(n)
+            if re.match(close, line):
+                close = None
+            continue
+        m = re.match(r'^(\s*)(?:function\s+[\w-]+|[A-Za-z_][\w-]*\s*\(\s*\))', line)
+        if m:
+            in_func.add(n)
+            if not re.search(r'\}\s*(?:#.*)?$', line):
+                close = r'^' + re.escape(m.group(1)) + r'\}'
+    if close is not None:
+        return set(), 'mode argument not applied, every line counted: a function definition does not close'
+
+    def arg(k, op, default):
+        if len(argv) >= k and not (op == ':-' and argv[k - 1] == ''):
+            v = argv[k - 1]
+        else:
+            v = default if op else ''
+        return None if re.search(r'[$`]', v) or re.fullmatch(r'\d*[<>|&;].*', v) else v
+
+    modes = {str(k): arg(k, '', '') for k in range(1, 10)}
+    for n, t in toks.items():
+        i = 0
+        while i < len(t) and t[i] in ('export', 'readonly'):
+            i += 1
+        m = MODE_ASSIGN.fullmatch(t[i]) if i < len(t) else None
+        if m and n not in in_func and (i + 1 == len(t) or t[i + 1] == ';'):
+            modes[m.group(1)] = arg(int(m.group(2) or m.group(3)), m.group(4) or '', m.group(5) or '')
+    flat = '\n'.join(' '.join(t) for t in toks.values())
+    if re.search(r'\bnocasematch\b', flat):
+        return set(), 'mode argument not applied, every line counted: nocasematch changes how words compare'
+    if re.search(r'(?:^|\s)(?:shift|getopts|source|\.)(?:\s|$)|\bset\s+--', flat, re.M):
+        modes = {k: None for k in modes}  # positionals moved, or another file may set the mode
+    for name in [k for k in modes if not k.isdigit()]:
+        if (len(re.findall(rf'(?:^|[\s;&|(]){name}\+?=', flat, re.M)) > 1 or re.search(rf'\$\{{{name}:?=', flat) or
+                re.search(rf'\b(?:read|for|mapfile|readarray|let|declare|local|typeset|unset)\b[^\n]*\b{name}\b', flat)):
+            modes[name] = None
+        others = [x for i, ts in toks.items() for j, x in enumerate(ts)
+                  if (x == name and not (j == 1 and ts[0] in ('export', 'readonly') and len(ts) == 2))
+                  or re.match(rf'{name}\+?=', x)]
+        if len(others) > 1:  # printf -v MODE, builtin read MODE, eval "MODE=x", a second MODE=
+            modes[name] = None
+
+    def refs(ts, n):
+        names = set(VAR_REF.findall(' '.join(ts)))
+        return {x for x in names if x in modes and not (x.isdigit() and n in in_func)}
+
+    def test(cond, n):
+        """True/False for a literal compare of a mode variable; None when it cannot be read."""
+        inner = cond[1:-1] if cond[:1] == ['['] and cond[-1:] == [']'] else \
+            cond[1:-1] if cond[:1] == ['[['] and cond[-1:] == [']]'] else cond[1:] if cond[:1] == ['test'] else None
+        if not inner or len(inner) != 3 or inner[1] not in ('=', '==', '!='):
+            return None
+        sides = [VAR_REF.fullmatch(x) and re.fullmatch(r'\$\{?(\w+)\}?', x) for x in (inner[0], inner[2])]
+        var, word = (inner[0], inner[2]) if sides[0] else (inner[2], inner[0]) if sides[1] else (None, None)
+        if var is None or '$' in word or '`' in word:
+            return None
+        name = re.fullmatch(r'\$\{?(\w+)\}?', var).group(1)
+        if n in in_func or name not in refs([var], n) or modes[name] is None or not re.fullmatch(r'[\w.@-]+', word):
+            return None
+        same = modes[name] == word  # word is a plain literal, so [[ == ]] and [ = ] agree
+        return same if inner[1] != '!=' else not same
+
+    stack, dead, used, why = [], set(), set(), ''
+
+    def gone(upto=None):
+        return any(f['dead'] for f in stack[:upto])
+
+    def end_branch(t):
+        if stack and stack[-1]['kind'] == 'case' and ';;' in t:
+            stack[-1]['pat'] = True  # fi;; esac;; done;; end a branch too
+
+    heredoc = None
+    for n, line in lines:
+        t = toks[n]
+        if heredoc is not None:  # heredoc text is data: its if/fi words are not shell keywords
+            if line.strip() == heredoc:
+                heredoc = None
+            if gone():
+                dead.add(n)
+            continue
+        if not t:
+            continue
+        if '<<' in t and t.index('<<') + 1 < len(t):
+            heredoc = t[t.index('<<') + 1].lstrip('-')
+        mentioned = refs(t, n)
+        head = t[0]
+        if any(x in (';&', ';;&') for x in t):
+            why = why or f'line {n} falls through to the next case branch'
+        header = head in ('if', 'elif', 'while', 'until', 'for') or (head == 'case' and t[-1] == 'esac')
+        if not header and any(x in ('then', 'else', 'elif', 'fi', 'case', 'esac') for x in t[1:]) and \
+                not (t[-1] in ('fi', 'esac') and t.count(t[-1]) == 1 and t[-2:-1] in ([';'], [';;'])
+                     and not any(x in ('then', 'else', 'elif', 'case') for x in t[1:])):
+            why = why or f'line {n} has an if or case keyword after a command'
+        if not header and ';;' in t[:-1] and t[t.index(';;') + 1:] != ['esac']:
+            why = why or f'line {n} holds more than one case branch'
+        if head in ('if', 'elif', 'while', 'until'):
+            body_at = t.index('then') if 'then' in t else t.index('do') if 'do' in t else len(t)
+            cond = t[1:body_at]
+            while cond and cond[-1] == ';':
+                cond = cond[:-1]
+            r = test(cond, n) if head in ('if', 'elif') else None
+            if mentioned and r is None:
+                why = why or f'line {n} tests the mode in a way the checker cannot read ({short(cond, 60)})'
+            used |= mentioned
+            if head in ('while', 'until'):
+                if gone():
+                    dead.add(n)
+                end_branch(t)
+                continue
+            if 'fi' in t[body_at:]:  # if ...; then ...; fi on one line rules out no other line, so it just counts
+                if gone():
+                    dead.add(n)
+                end_branch(t)
+                continue
+            if head == 'if':
+                if gone():
+                    dead.add(n)
+                stack.append({'kind': 'if', 'taken': False, 'dead': False})
+            else:
+                if not stack or stack[-1]['kind'] != 'if':
+                    return set(), f'mode argument not applied, every line counted: elif without if at line {n}'
+                if gone(-1) or stack[-1]['taken']:
+                    dead.add(n)
+            f = stack[-1]
+            f['dead'] = f['taken'] or r is False
+            f['taken'] = f['taken'] or r is True
+        elif head == 'else':
+            if not stack or stack[-1]['kind'] != 'if':
+                return set(), f'mode argument not applied, every line counted: else without if at line {n}'
+            stack[-1]['dead'] = stack[-1]['taken']
+            if gone():
+                dead.add(n)
+        elif head in ('fi', 'esac'):
+            if not stack or stack[-1]['kind'] != ('if' if head == 'fi' else 'case'):
+                return set(), f'mode argument not applied, every line counted: {head} does not match at line {n}'
+            stack.pop()
+            if gone():
+                dead.add(n)
+        elif head == 'case' and t[-1] == 'esac':  # a one-line case, usually a usage guard: counted like any line
+            if gone():
+                dead.add(n)
+        elif head == 'case':
+            word = t[1] if len(t) > 1 else ''
+            m = re.fullmatch(r'\$\{?(\w+)\}?', word)
+            d = re.fullmatch(r'\$\{([1-9])(:?-)([^}]*)\}', word)
+            value = modes[m.group(1)] if m and m.group(1) in refs([word], n) else \
+                arg(int(d.group(1)), d.group(2), d.group(3)) if d and n not in in_func and modes[d.group(1)] is not None else None
+            if n in in_func:
+                value = None
+            if d and value is not None:
+                modes[word] = value
+                mentioned = (mentioned - {d.group(1)}) | {word}
+            if mentioned and (value is None or len(t) != 3 or t[2] != 'in'):
+                why = why or f'line {n} picks a case on the mode in a way the checker cannot read'
+            used |= mentioned
+            if gone():
+                dead.add(n)
+            stack.append({'kind': 'case', 'taken': False, 'dead': False, 'value': value, 'pat': True,
+                          'mode': bool(mentioned)})
+        elif stack and stack[-1]['kind'] == 'case' and stack[-1]['pat']:
+            f = stack[-1]
+            if ')' not in t:
+                if f['mode']:
+                    why = why or f'line {n} is a case pattern the checker cannot read'
+                continue
+            close_at = t.index(')')
+            pats = [p for p in t[:close_at] if p not in ('|', '(')]
+            bare_star = re.match(r'\s*\(?\s*\*\s*\)', line)
+            if f['mode'] and not all(re.fullmatch(r'[\w.@-]+', p) or (p == '*' and bare_star) for p in pats):
+                why = why or f'line {n} has a case pattern that is not a plain word'
+            body = t[close_at + 1:]
+            if f['value'] is None:
+                f['dead'] = False
+            else:
+                hit = any(fnmatch.fnmatchcase(f['value'], p) for p in pats)
+                f['dead'] = f['taken'] or not hit
+                f['taken'] = f['taken'] or hit
+            if f['mode'] and any(x in (';&', ';;&') for x in body):
+                why = why or f'line {n} falls through to the next case branch'
+            f['pat'] = ';;' in body
+            if gone():
+                dead.add(n)
+            if body[-1:] == ['esac']:
+                stack.pop()
+            continue
+        else:
+            segs = [i for i, x in enumerate(t) if i == 0 or t[i - 1] in SEPARATORS or set(t[i - 1]) <= set(';&|()')]
+            if any(refs([t[i]], n) and not re.match(r'[A-Za-z_]\w*\+?=', t[i]) for i in segs):
+                why = why or f'line {n} runs a command named by the mode'
+            if gone():
+                dead.add(n)
+        # a closer after ; on the same line: gam x; fi
+        if not header and head not in ('fi', 'esac') and len(t) > 1 and t[-1] in ('fi', 'esac') and stack:
+            stack.pop()
+        end_branch(t)
+    if not used and not why:
+        return set(), ''
+    if stack:
+        return set(), 'mode argument not applied, every line counted: an if or case does not close'
+    if why:
+        return set(), f'mode argument not applied, every line counted: {why}'
+    shown = ', '.join(f'{"$" + k if k.isdigit() else k}={modes[k]!r}' for k in sorted(used))
+    return dead, f'mode read from the arguments: {shown}; {{set_aside}} gam line(s) in other branches are not counted'
+
+
 class Checker:
     """Reads script files and collects findings for each."""
 
@@ -1021,7 +1253,7 @@ class Checker:
         self.tables = tables or Tables()
         self.gam = GamParser(self.tables)
 
-    def check_file(self, path, depth=0, lang=None):
+    def check_file(self, path, depth=0, lang=None, argv=None):
         """Return the findings for one file."""
         path = Path(path)
         data = path.read_bytes()
@@ -1030,15 +1262,19 @@ class Checker:
         else:
             text = data.decode('utf-8-sig', errors='replace')
         lang = lang or self.language(path, text)
-        return self.check_text(text, str(path), lang, [path.resolve().parent, Path.cwd()], depth)
+        return self.check_text(text, str(path), lang, [path.resolve().parent, Path.cwd()], depth, argv)
 
-    def check_text(self, text, name, lang, base_dirs=None, depth=0):
-        """Return the findings for script text that did not come from a file, such as a paste."""
+    def check_text(self, text, name, lang, base_dirs=None, depth=0, argv=None):
+        """Return the findings for script text that did not come from a file, such as a paste.
+
+        argv is the argument list the script was run with (bash x.sh check), or None when it is
+        checked on its own; with it, a shell script's lines in other modes' branches are set aside.
+        """
         ctx = Context(name, base_dirs or [Path.cwd()], self, depth)
         if lang == 'python':
             findings = self._python(text, ctx)
         else:
-            findings = self._shell_like(text, lang, ctx)
+            findings = self._shell_like(text, lang, ctx, argv if lang == 'shell' else None)
         return sorted(findings, key=lambda f: (f.file != ctx.file, f.line))
 
     @staticmethod
@@ -1064,14 +1300,18 @@ class Checker:
 
     # ----- shell, PowerShell, batch, gam batch files
 
-    def _shell_like(self, text, lang, ctx):
+    def _shell_like(self, text, lang, ctx, argv=None):
         lines = _logical_lines(text, lang)
         gam_vars, wrappers = self._shell_aliases(lines, lang)
         findings, code_lines = [], []
+        dead, mode_note = _mode_scope(lines, argv) if argv is not None else (set(), '')
+        if mode_note:
+            findings.append(Finding(ctx.file, 0, READ, mode_note, aside='note'))
         for n, line in lines:
             body = line.strip()
             if not body or (lang == 'batch' and re.match(r'(?i)^(rem\b|::)', body)):
                 continue
+            first = len(findings)
             toks = _tokenise(body, lang)
             code_lines.append((n, toks))
             if lang == 'gambatch' and toks and toks[0].lower() == 'execute':
@@ -1106,7 +1346,7 @@ class Checker:
                         findings.append(Finding(ctx.file, n, UNKNOWN, 'gam appears in a command the checker could not follow',
                                                 short(seg), note='handed to another program (bash -c, ssh, Start-Process); check the inner command on its own'))
                     elif (script := self._script_path(seg)) is not None:
-                        findings.extend(ctx.follow_script(script, n, short(seg)))
+                        findings.extend(ctx.follow_script(script, n, short(seg), seg))
                     local_text.extend([' '.join(seg), sep])
                     continue
                 args = [_dynamic(t, lang) for t in seg[at + 1:]]
@@ -1114,6 +1354,11 @@ class Checker:
                     continue  # the body of a wrapper function; its callers are checked instead
                 findings.extend(self.gam.parse(args, ctx, n))
             findings.extend(self._local(' '.join(t for t in local_text if t), ctx, n))
+            if n in dead:
+                for f in findings[first:]:
+                    f.aside = f.aside or 'not-run'
+        if mode_note:
+            findings[0].what = mode_note.replace('{set_aside}', str(sum(f.aside == 'not-run' and f.command.startswith('gam') for f in findings)))
         findings.extend(self._credentials(code_lines, ctx))
         if not any(f.command.startswith('gam') for f in findings) and ctx.depth == 0:
             findings.append(Finding(ctx.file, 0, UNKNOWN, f'no gam commands found in {len(lines)} lines',
@@ -1707,7 +1952,7 @@ class _PythonReader:
 
 def verdict(findings):
     """The worst level among the findings."""
-    return max((f.level for f in findings), default=UNKNOWN)
+    return max((f.level for f in findings if not f.aside), default=UNKNOWN)
 
 
 DOTS = ['\U0001F7E2', '\U0001F7E0', '⚪', '\U0001F534', '\U0001F534']  # green, orange, white, red, red; by level
@@ -1718,7 +1963,7 @@ def tenant_unguarded(findings, path):
 
     A script run under the wrong gam.cfg section changes the wrong tenant; reading
     gam info domain first and stopping on a customer-ID mismatch is the guard."""
-    own = sorted((f for f in findings if f.file == path), key=lambda f: f.line)
+    own = sorted((f for f in findings if f.file == path and not f.aside), key=lambda f: f.line)
     for f in own:
         if re.search(r'\binfo\s+domain\b', f.command, re.I):
             return None
@@ -1744,6 +1989,8 @@ def can_print_dots(stream):
 def render(path, findings, tables, quiet=False, dots=False):
     """Plain-text report. ASCII unless dots=True, which prefixes each level with a coloured dot."""
     v = verdict(findings)
+    asides = [f for f in findings if f.aside]
+    findings = [f for f in findings if not f.aside]
     dot = (lambda lvl: DOTS[lvl] + ' ') if dots else (lambda lvl: '')
     pad = '   ' if dots else ''  # a dot is two columns wide plus its space
     counts = {name: sum(1 for f in findings if f.level == lvl) for lvl, name in enumerate(LEVEL_NAMES)}
@@ -1756,10 +2003,18 @@ def render(path, findings, tables, quiet=False, dots=False):
     if unguarded:
         out += [f'NOTE: nothing checks which tenant GAM is pointed at before the first change (L{unguarded}).',
                 '      A gam info domain check that stops on the wrong customer ID belongs above it.', '']
+    for f in asides:
+        if f.aside == 'note':
+            out += [f'NOTE: {Path(f.file).name}: {f.what}.', '']
     older = sorted({f.note.split(';')[0][len('written for '):] for f in findings if f.note.startswith('written for ')})
     if older:
         out += [f'NOTE: parts of this script are written for {", ".join(older)} and will fail on GAM7.', '']
-    for f in sorted(findings, key=lambda x: (x.file, x.line)):
+    skipped = [f for f in asides if f.aside == 'not-run']
+    for f in sorted(findings, key=lambda x: (x.file, x.line)) + (
+            [None] + sorted(skipped, key=lambda x: (x.file, x.line)) if skipped else []):
+        if f is None:
+            out += ['', 'NOT RUN IN THIS MODE (not counted in the verdict):']
+            continue
         if quiet and f.level == READ:
             continue
         where = f'L{f.line}' if f.file == str(path) else f'{Path(f.file).name}:L{f.line}'
