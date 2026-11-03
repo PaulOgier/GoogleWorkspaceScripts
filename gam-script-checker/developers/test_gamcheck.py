@@ -550,6 +550,19 @@ def test_modes(checker):
     assert g.verdict(checker.check_file(FIXTURES / 'modes_if.sh')) == g.CHANGES
 
 
+def test_language():
+    """A shell script is read as shell even when its text has batch-looking % signs."""
+    from pathlib import Path
+    pct = "printf '%s|%s\\n' a b\n# notes). Still opens $EDITOR\n"
+    assert g.Checker.language(Path('x.sh'), pct) == 'shell'
+    assert g.Checker.language(Path('x'), '#!/bin/bash\n' + pct) == 'shell'
+    assert g.Checker.language(Path('x'), '#!/usr/bin/env bash\n' + pct) == 'shell'
+    assert g.Checker.language(Path(''), 'set X=%Y%\n') == 'batch'  # a paste with no shebang still guesses
+    assert g.Checker().check_text('X=" "\ngam print users\n', '<t>', 'shell')  # used to raise IndexError
+    found = g.Checker().check_text('#!/bin/bash\n' + pct, '<t>', g.Checker.language(Path('x.sh'), pct))
+    assert not any('Still' in f.what for f in found), found
+
+
 def main():
     checker = g.Checker()
     n = test_fixture_verdicts(checker)
@@ -564,6 +577,7 @@ def main():
     test_paste()
     test_invariants(checker)
     test_modes(checker)
+    test_language()
     print(f'ok: {n} fixtures, details, modes, verb coverage, positive control, paste, gates, adversarial, inert, invariants')
 
 

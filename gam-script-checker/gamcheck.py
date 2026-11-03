@@ -39,7 +39,7 @@ YOU ASSUME ALL RISK ASSOCIATED WITH THE USE OF THIS SOFTWARE.
 Author:       Paul Ogier
 Created:      2026-09-13
 Updated:      2026-11-03
-Version:      0.4.5
+Version:      0.4.6
 Status:       Pre-release
 Python:       3.9+
 Dependencies: None. Stdlib only; never runs gam or the script it checks.
@@ -73,7 +73,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
-__version__ = '0.4.5'
+__version__ = '0.4.6'
 
 HERE = Path(__file__).resolve().parent
 VERBS_DIR = HERE / 'verbs'
@@ -1282,7 +1282,7 @@ class Checker:
         """Pick a reader from the extension, then the shebang."""
         ext = path.suffix.lower()
         by_ext = {'.py': 'python', '.ps1': 'powershell', '.psm1': 'powershell', '.bat': 'batch', '.cmd': 'batch',
-                  '.txt': 'gambatch', '.gam': 'gambatch'}
+                  '.txt': 'gambatch', '.gam': 'gambatch', '.sh': 'shell', '.bash': 'shell', '.zsh': 'shell'}
         if ext in by_ext:
             return by_ext[ext]
         first = text.split('\n', 1)[0]
@@ -1290,6 +1290,8 @@ class Checker:
             return 'python'
         if first.startswith('#!') and 'pwsh' in first:
             return 'powershell'
+        if re.match(r'#!.*\b(?:ba|z|k|da)?sh\b', first):
+            return 'shell'  # printf '%s|%s' in a bash script must not read as batch
         # No extension or shebang (a paste): the line-continuation character
         # and variable syntax are the only clues to which shell it was written for.
         if re.search(r'`\s*$|\$env:|\$_\b', text, re.M):
@@ -1484,7 +1486,8 @@ class Checker:
         }[lang]
         for _, line in lines:
             m = re.match(assign, line)
-            if m and _gam_name(m.group(2).strip().strip('"\'').split()[0] if m.group(2).strip() else '', set(), set()):
+            words = m.group(2).strip().strip('"\'').split() if m else []  # X=" " leaves no word
+            if m and _gam_name(words[0] if words else '', set(), set()):
                 gam_vars.add(m.group(1).lower())
             m = re.match(r'^\s*alias\s+([\w-]+)=[\'"]?(\S+)', line)
             if m and _gam_name(m.group(2).strip('"\''), set(), set()):
