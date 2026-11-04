@@ -1996,6 +1996,51 @@ class TestCompareWithPrevious(unittest.TestCase):
         self.assertIn("Top actions", html)
         self.assertIn("<li><strong>title b</strong>. Fix it.</li>", html)
 
+    def test_raised_check_is_not_compared(self):
+        # AUD-02: the check that found "fwd" last run raised this run.
+        prev = self.make_run("tenant_audit_20260901_000000")
+        fwd = self.finding("fwd", ["x@example.com"], sev="CRITICAL")
+        fwd.check = "check_external_forwarding"
+        other = self.finding("other", ["y@example.com"])
+        other.check = "check_dormant_accounts"
+        err = ts.Finding("check-error-check_sendas", "INFO", "Internal", "m",
+                         "r", [], "tenant_scope.log")
+        ts.render_html(prev, [fwd, other, err])
+        ctx = self.make_run("tenant_audit_20261001_000000",
+                            collected="2026-10-01 08:00")
+        ctx.check_errors = ["check_external_forwarding"]
+        history = ts.compare_with_previous(ctx, [], ts.find_previous_run(ctx))
+        self.assertEqual(["other"], [r["id"] for r in history["resolved"]])
+        self.assertEqual(["fwd"], [r["id"] for r in history["not_compared"]])
+
+    def test_raised_check_older_run_without_check_column(self):
+        prev = self.make_run("tenant_audit_20260901_000000")
+        ts.render_html(prev, [self.finding("fwd", ["x@example.com"])])
+        path = prev.run_dir / "findings.csv"
+        rows = ts.read_csv_rows(path)
+        for r in rows:
+            r.pop("check", None)
+        ts.write_rows(path, rows)
+        ctx = self.make_run("tenant_audit_20261001_000000",
+                            collected="2026-10-01 08:00")
+        ctx.check_errors = ["check_sendas"]
+        history = ts.compare_with_previous(ctx, [], ts.find_previous_run(ctx))
+        self.assertEqual([], history["resolved"])
+        self.assertEqual(["fwd"], [r["id"] for r in history["not_compared"]])
+
+    def test_run_checks_names_the_producing_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = ts.RunContext(Path(tmp), make_args())
+            ctx.internal_domains = ["example.com"]
+            (Path(tmp) / "forwards.csv").write_text(
+                "User,forwardEnabled,forwardTo,disposition\n"
+                "u@example.com,True,rival@gmail.com,archive\n",
+                encoding="utf-8")
+            ctx.set_module("forwards", "ok", 1)
+            found = [f for f in ts.run_checks(ctx)
+                     if f.fid == "external-forwarding"]
+            self.assertEqual("check_external_forwarding", found[0].check)
+
     def test_compared_on_what_ran(self):
         # caalevels (tier 4) ran in neither run and courses is n/a in both:
         # left out. A finding that reads no module compares as it is. One

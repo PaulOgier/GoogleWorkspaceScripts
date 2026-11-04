@@ -2275,6 +2275,9 @@ class Finding:
         self.source = source
         self.id_field = id_field
         self.modules: List[str] = []
+        # The check function that raised it, so a later run can tell a fix
+        # from a check that did not run.
+        self.check = ""
         # new / persisting / first_run / not_compared, set by the comparison.
         self.change = ""
         self.row_changes: Dict[str, str] = {}
@@ -5899,6 +5902,7 @@ def run_checks(ctx: RunContext) -> List[Finding]:
             read = sorted({k for k, _ in ctx.consulted})
             for finding in raised:
                 finding.modules = read
+                finding.check = check.__name__
             findings.extend(raised)
             # Clean means the check saw all of its data and found nothing.
             # One missing or partly collected module makes it a coverage
@@ -6071,11 +6075,16 @@ def compare_with_previous(ctx: RunContext, findings: List[Finding],
             f.row_changes[eid] = "persisting" if eid in before else "new"
         summary["resolved_rows"] += len(before - now)
     for fid, r in prev_f.items():
-        if fid in current_ids:
+        # An internal check-error note is not a client finding to resolve.
+        if fid in current_ids or fid.startswith("check-error-"):
             continue
         # A run from before v1.7.0 has no modules column, so it cannot say.
         mods = [m for m in (r.get("modules") or "").split(";") if m]
-        if r.get("modules") is not None and comparable(mods):
+        # A finding whose check raised this run was not looked for. Before
+        # v1.8.0 the check was not recorded, so any raised check counts.
+        unread = (r["check"] in ctx.check_errors if r.get("check")
+                  else bool(ctx.check_errors))
+        if r.get("modules") is not None and comparable(mods) and not unread:
             summary["resolved"].append(r)
         else:
             summary["not_compared"].append(r)
@@ -6504,11 +6513,11 @@ v{SCRIPT_VERSION}. Print this page for a PDF copy.
     with open(findings_csv, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(["severity", "id", "title", "count", "source",
-                         "change", "modules"])
+                         "change", "modules", "check"])
         for finding in findings:
             writer.writerow([finding.severity, finding.fid, finding.title,
                              finding.count, finding.source, finding.change,
-                             ";".join(finding.modules)])
+                             ";".join(finding.modules), finding.check])
     print_success(f"Findings CSV written: {findings_csv}")
     evidence_csv = ctx.run_dir / "findings_evidence.csv"
     evidence_rows = []

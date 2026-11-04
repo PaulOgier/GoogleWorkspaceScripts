@@ -251,7 +251,7 @@ runs can be diffed by who was named, not just by counts.
   "what this means" and "what to do" copy, and evidence samples. Print it for
   a clean PDF.
 - `findings.csv`: the findings list in machine-readable form, with whether
-  each is new or carried over from last month.
+  each is new or carried over from last month, and the check that raised it.
 - `findings_evidence.csv`: every evidence row of every finding, with a stable
   `evidence_id` for comparing months.
 - The report's header and footer say it was made with the Google Workspace
@@ -497,8 +497,8 @@ Under the severity tiles:
 - **What changed since last month.** Each finding is marked new or carried
   over, rows within a finding are marked new, and resolved findings are
   listed. Only a completed earlier run of the same customer is used. A
-  finding whose data was missing or only partly collected in either run is
-  "not compared", never "resolved".
+  finding whose data was missing or only partly collected in either run, or
+  whose check failed to run this time, is "not compared", never "resolved".
 - **Upgrade opportunities.** Protections the tenant's edition does not
   include. They are never counted against the score.
 
