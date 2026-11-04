@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -4161,6 +4162,31 @@ boss@example.com,0,0""")
         self.ctx._rows_cache.clear()
         found = {f.fid for f in ts.check_admin_second_factors(self.ctx)}
         self.assertIn("admins-not-phish-resistant", found)
+
+
+class TestLightPassAfterCtrlC(CtxTestCase):
+    def test_running_modules_are_recorded_after_first_ctrl_c(self):
+        """AUD-37: a module still running at Ctrl+C finishes; record it."""
+        import threading
+        started = threading.Event()
+
+        def fake(ctx, mod):
+            if mod["key"] == "groups":
+                started.wait(2)
+                ts.shutdown_requested = True
+                return "ok", 1, "", 0.0
+            started.set()
+            time.sleep(0.3)
+            return "ok", 2, "", 0.3
+        original = (ts._run_collector, ts.shutdown_requested)
+        ts._run_collector = fake
+        try:
+            ts.collect(self.ctx, [ts.MODULE_BY_KEY["groups"],
+                                  ts.MODULE_BY_KEY["orgs"]])
+        finally:
+            ts._run_collector, ts.shutdown_requested = original
+        self.assertEqual("ok", self.ctx.module_status("groups"))
+        self.assertEqual("ok", self.ctx.module_status("orgs"))
 
 
 class TestPerTenantAdmin(unittest.TestCase):

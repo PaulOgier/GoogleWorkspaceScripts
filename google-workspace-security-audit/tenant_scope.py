@@ -2312,13 +2312,21 @@ def collect(ctx: RunContext, modules: List[Dict]):
     if pending and not stop():
         with ThreadPoolExecutor(max_workers=LIGHT_WORKERS) as pool:
             futures = {pool.submit(_run_collector, ctx, m): m for m in pending}
+            recorded = set()
             for fut in as_completed(futures):
                 _record(ctx, futures[fut], *fut.result())
+                recorded.add(fut)
                 if shutdown_requested:
                     # Running gam processes finish (they are in their own
                     # group); queued modules are dropped for the resume.
                     pool.shutdown(wait=False, cancel_futures=True)
                     break
+            # The ones already running when Ctrl+C landed still finish; record
+            # them, or the resume re-runs work that completed.
+            running = [f for f in futures
+                       if f not in recorded and not f.cancelled()]
+            for fut in as_completed(running):
+                _record(ctx, futures[fut], *fut.result())
 
     for mod in heavy:
         if stop():
