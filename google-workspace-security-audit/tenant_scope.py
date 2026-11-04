@@ -2642,6 +2642,10 @@ def check_super_admin_count(ctx: RunContext) -> List[Finding]:
     admins = _super_admins(ctx)
     if len(admins) >= 2:
         return []
+    if ctx.module_status("users") == "partial":
+        # A timed-out user list can miss the second admin; the partial
+        # module already keeps this check off the clean list.
+        return []
     evidence = [{"Super admin": col(r, "primaryEmail")} for r in admins]
     return [Finding(
         "few-super-admins", "CRITICAL",
@@ -3180,10 +3184,13 @@ def check_2sv_enrolment(ctx: RunContext) -> List[Finding]:
     pct = round(100 * (len(users) - len(unenrolled)) / len(users))
     evidence = [{"User": col(r, "primaryEmail"),
                  "Last login": col(r, "lastLoginTime")} for r in unenrolled]
+    partial = ctx.module_status("users") == "partial"
     return [Finding(
         "2sv-enrolment", "MEDIUM",
-        f"2-step verification enrolment is at {pct}%",
-        f"{len(unenrolled)} of {len(users)} active accounts sign in with a "
+        "2-step verification enrolment (user list incomplete)" if partial
+        else f"2-step verification enrolment is at {pct}%",
+        f"{len(unenrolled)} of {len(users)} "
+        + ("listed " if partial else "") + "active accounts sign in with a "
         "password alone. A guessed or phished password on any of them gives "
         "an attacker the whole account.",
         "Run an enrolment campaign, then enforce 2-step verification by "
@@ -4441,6 +4448,12 @@ def check_tenant_shape(ctx: RunContext) -> List[Finding]:
                       "Value": str(count) if count else "none"})
     if not facts:
         return []
+    # A timed-out module's count is a floor, not the figure.
+    partial = sorted({key for key, usable in ctx.consulted
+                      if usable and ctx.module_status(key) == "partial"})
+    if partial:
+        facts.append({"Fact": "Incomplete lists (counts are a minimum)",
+                      "Value": ", ".join(partial)})
     return [Finding(
         "tenant-shape", "INFO", "Tenant at a glance",
         "The headline numbers for this tenant, from the collected data. "

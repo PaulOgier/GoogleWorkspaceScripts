@@ -95,6 +95,22 @@ user@example.com,False,False,2026-08-01T10:00:00Z,True,False,,False,False,Busine
         ids = self.finding_ids(ts.check_super_admin_count(self.ctx))
         self.assertIn("few-super-admins", ids)
 
+    def test_partial_user_list_judges_no_counts(self):
+        """AUD-27: a timed-out users.csv can miss the second admin."""
+        self.write_csv("users", f"""{USERS_HEADER}
+boss@example.com,False,False,2026-08-01T10:00:00Z,True,True,,True,False,Business
+user@example.com,False,False,2026-08-01T10:00:00Z,False,False,,False,False,Business""",
+                       status="partial")
+        self.assertEqual([], ts.check_super_admin_count(self.ctx))
+        found = ts.check_2sv_enrolment(self.ctx)
+        self.assertIn("user list incomplete", found[0].title)
+        self.assertNotIn("%", found[0].title)
+        self.ctx.consulted = []
+        facts = {f["Fact"]: f["Value"]
+                 for f in ts.check_tenant_shape(self.ctx)[0].evidence}
+        self.assertEqual("users",
+                         facts["Incomplete lists (counts are a minimum)"])
+
     def test_two_super_admins_is_clean(self):
         self.write_csv("users", f"""{USERS_HEADER}
 boss@example.com,False,False,2026-08-01T10:00:00Z,True,True,,True,False,Business
