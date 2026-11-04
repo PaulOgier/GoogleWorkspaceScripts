@@ -294,61 +294,80 @@ No Critical finding. The read-only promise holds: the only write to a tenant is 
 
 ## B2. Medium
 
-### AUD-08 `[ ]` A refused `--run-dir` still has the new tenant's data written into it
+### AUD-08 `[x]` A refused `--run-dir` still has the new tenant's data written into it
+- Done (`ba0bf69`): both refusals (other customer's run directory, wrong customer for tenants.json) come before any write: no domaininfo.txt, no preflight table or identity in the manifest; the table is printed. The refusal's own error line still reaches the run log, as a record of why it stopped.
 - CONFIRMED (reproduced). `preflight` 1265-1283 writes `domaininfo.txt`, saves the preflight table into the manifest, and the log already carries the new tenant's identity lines, before the customer-ID comparison refuses the directory. A later `--render-only --run-dir <customer A's run>` then computes licence waste from customer B's seats against A's `licenses.csv` and prints B's domain in the appendix. This is the cross-customer mixing v1.7.2 set out to prevent. Fix: compare `saved`/`expected` before any write, and print rather than save the preflight table into a refused directory.
 
-### AUD-09 `[ ]` `--render-only --run-dir X --tenant Y` is accepted for another customer's run
+### AUD-09 `[x]` `--render-only --run-dir X --tenant Y` is accepted for another customer's run
+- Done (`ba0bf69`): one comparison in run_tenant before the tenant's name and break-glass list are applied.
 - CONFIRMED (reproduced; two reviewers). `run_tenant` 6798-6809: the customer-ID guard lives only in `preflight`, which `--render-only` skips, although `tenant["customer_id"]` and `manifest.meta.customer_id` are both already in hand. The report header shows Y's name over X's data, Y's break-glass accounts are excluded from X's dormancy findings, and `finish()` saves the manifest so X permanently carries Y's `tenant_name` and `break_glass`. Fix: one comparison before `finish()`.
 
-### AUD-10 `[ ]` `--all` cannot produce a deliverable report as documented, and `--admin` is one address for every tenant
+### AUD-10 `[x]` `--all` cannot produce a deliverable report as documented, and `--admin` is one address for every tenant
+- Done (`ba0bf69`): optional `admin` per tenants.json entry, used when --admin is not given; --admin with --all warns; --grant-temp-access with --tenant/--all may take the entry's admin and a tenant with neither is refused. Also: the suite now fences off any installed gam (setUpModule).
 - CONFIRMED by logic (coordinator verified `RunContext.admin` at 1049 and the gate at 1738). `tenants.json` has no `admin` field (see `tenants.example.json`) and `run_tenant` never sets a per-tenant admin, so under `--all --yes --no-open` (the module docstring's own example) `collect_sd_external` returns `"skipped", 0, "--admin required for Shared Drive scans"`; `shareddrive_external` is in `DELIVERY_CRITICAL_MODULES`, so every tenant's `qa_report.html` says "Hold for review" and every tenant exits 2. Passing one `--admin` with `--all` makes every other tenant check DWD scopes and impersonate an account that does not exist there. Fix: optional `admin` per tenant entry, used when `--admin` is not given; warn when `--all` is combined with `--admin`.
 
-### AUD-11 `[ ]` `load_tenants` accepts shapes that break the hard stop or the break-glass exclusion, and crashes on others
+### AUD-11 `[x]` `load_tenants` accepts shapes that break the hard stop or the break-glass exclusion, and crashes on others
+- Done (`0730862`): customer_id, name, gamcfgdir, admin (str), enabled (bool), break_glass (list of str), entry and tenants shapes and folder-safe keys are checked.
 - CONFIRMED (reproduced). 6760-6779: `"customer_id": 123` (int) is accepted and then `customer != expected` compares a string with an int, so the wrong-tenant hard stop fires on every run of a correct tenant; `"break_glass": "bg@example.com"` (string) becomes `['b','g','@',...]`, so the break-glass account is reported dormant every month; `"enabled": "false"` (string) is truthy; a top-level array or a string entry raises `AttributeError` (main catches only `ConfigError`); a key such as `"a/../b"` is used verbatim as a path component. Fix: type-check `customer_id` (str), `break_glass` (list of str), `enabled` (bool), `gamcfgdir` (str), and reject keys with path separators.
 
-### AUD-12 `[ ]` Forced exit (second Ctrl+C or SIGTERM) exits 2, which the README defines as "complete but some modules could not run"
+### AUD-12 `[x]` Forced exit (second Ctrl+C or SIGTERM) exits 2, which the README defines as "complete but some modules could not run"
+- Done (`991ab90`): handler exits 130; an --all batch stopped between tenants exits 130; unknown --only/--skip keys are a parser error.
 - CONFIRMED (two reviewers; coordinator read the handler). `signal_handler` 449-456 `sys.exit(2)`; README promises 130 for a stopped run so a scheduler can tell complete from stopped. SIGTERM uses the same handler, so a supervisor's double SIGTERM reads as a finished audit with gaps. Also: Ctrl+C before the tenant loop under `--all` returns 0 (6871-6873), and an unknown `--only`/`--skip` key `sys.exit(2)` from `selected_modules` (1167-1170) after a run directory has been created, stopping every tenant under `--all`. Fix: 130 from the handler, `parser.error` for the key typo (validated in `parse_args` before any directory is made).
 
-### AUD-13 `[ ]` `manifest.json` is written in place, not atomically
+### AUD-13 `[x]` `manifest.json` is written in place, not atomically
+- Done (`4232500`): manifest.json.tmp then os.replace.
 - PLAUSIBLE. `RunContext.save` 1085-1089 `write_text` directly; a forced exit, power cut or full disk mid-write yields "manifest.json unreadable; starting a fresh one", losing `customer_id` (so the other-customer refusal cannot fire for that directory) and `complete` (so the run drops out of `earlier_runs`) and re-collecting every module over the old CSVs. `_record`'s own docstring says "save() is not atomic". Fix: write to `manifest.json.tmp` and `os.replace`.
 
-### AUD-14 `[ ]` A tamingdns JSON-RPC error or MCP `isError` reply is scored as a passing DNS check
+### AUD-14 `[x]` A tamingdns JSON-RPC error or MCP `isError` reply is scored as a passing DNS check
+- Done (`78acd0c`): JSON-RPC error, isError, empty and non-verdict replies are {"error": ...}; a domain with only some errored checks marks the module partial (beyond the plan: otherwise those checks were still listed clean).
 - CONFIRMED (reproduced with a stubbed `urlopen`). `tamingdns_check` 1959-1967 returns `None` for `{"error": {...}}` and `{"raw": ...}` for `{"result": {"isError": true, ...}}`; neither carries an `"error"` key, so `_dns_domain`'s "every check failed, fall back to DoH" test is false, `collect_dns` marks the module `ok`, and `_dns_check_failed` returns False. A tenant with no DMARC whose DNS calls are rate limited is reported with no DNS finding and the DNS checks under "Checked and clean". Fix: treat `data.get("error")`, `result.get("isError")`, a `None` result and a `{"raw": ...}` result as `{"error": ...}`.
 
-### AUD-15 `[ ]` Preflight prints "all N required scopes PASS" when `check serviceaccount` tested nothing
+### AUD-15 `[x]` Preflight prints "all N required scopes PASS" when `check serviceaccount` tested nothing
+- Done (`653ca58`): NOT VERIFIED with GAM's last line when rc != 0 or any required scope has no PASS. Found on the way: GAM 7.50.00 prints `{scope:73} PASS`, no comma, and the parser required `, PASS`, so a FAIL was never seen; both forms are read now. Owed: confirm the real line shape on a VM.
 - CONFIRMED (reproduced). 1333-1352: `run_gam` returning rc 2 with `ERROR: Service Account: oauth2service.json, Does not exist` and no PASS/FAIL lines gives the preflight row "all 2 required scopes PASS" and an empty `failed_scopes`; each DWD module then fails at collect time and the appendix contradicts the module table. Fix: if `rc != 0` or `len(passed) + len(failed) < len(needed)`, record "NOT VERIFIED" with the stderr tail.
 
-### AUD-16 `[ ]` A UTF-8 BOM on a CSV header empties the audited user list
+### AUD-16 `[x]` A UTF-8 BOM on a CSV header empties the audited user list
+- Done (`a697499`): read_csv_rows and _strip_to_header read utf-8-sig with errors replaced; col() ignores a leading BOM for rows parsed from stdout.
 - Effect CONFIRMED (reproduced); trigger PLAUSIBLE (gam.cfg `charset = utf-8-sig`, which GAM's docs suggest for Excel users, or a CSV re-saved by Excel in a resumed run directory). `read_csv_rows` 710-714 opens `utf-8`; `col()` 717-734 lowercases keys but `"﻿".strip()` is not empty, so `col(row, "primaryEmail")` returns `""`. `active_users` is empty, `scan_user_list` raises `LookupError`, every per-user module is skipped, "fewer than two super admins" fires. Fix: `encoding="utf-8-sig"` (and `errors="replace"`, as `csv_data_rows` already does) in `read_csv_rows`, `_strip_to_header` and the `csv.DictReader(io.StringIO(out))` sites, or strip `﻿` in `col()`.
 
-### AUD-17 `[ ]` Collectors are not wrapped; one exception ends the run with a traceback and no report
+### AUD-17 `[x]` Collectors are not wrapped; one exception ends the run with a traceback and no report
+- Done (`b30f748`): _run_collector turns an exception into that module's error, traceback in gam_stderr.log.
 - Structure CONFIRMED; triggers PLAUSIBLE. `_run_collector` 2160-2163 and `collect` 2222-2247: checks are wrapped (`run_checks`), collectors are not, and `run_tenant` in single-tenant mode has no handler. Realistic triggers: strict UTF-8 decode of a GAM-written redirect file, `OSError` from `write_rows` when the disk fills during a tier-3 scan (the preflight estimate is order-of-magnitude), `csv.Error` on a truncated file after a kill. In the light pool the exception surfaces from `fut.result()` and the remaining futures' results are never recorded. Fix: wrap the call and return `("error", 0, f"{type(exc).__name__}: {exc}")`.
 
-### AUD-18 `[ ]` `check_public_files` reports "Checked and clean" with up to 19 "anyone with the link" files present
+### AUD-18 `[x]` `check_public_files` reports "Checked and clean" with up to 19 "anyone with the link" files present
+- Done (`db5e56c`): INFO `anyone-link-*` below the scale (same id as the HIGH).
 - CONFIRMED. 2367: below `ANYONE_LINK_SCALE` no finding of any severity is raised, and the check lands on the clean list under "Files public on the web or open to anyone with the link". Nineteen link-shared files, one of them the payroll sheet, read as clean. Fix: INFO finding listing link-shared files below the threshold (HIGH at or above), or reword the title.
 
-### AUD-19 `[ ]` `check_unmanaged_accounts` flags accepted and declined invitations as live personal accounts
+### AUD-19 `[x]` `check_unmanaged_accounts` flags accepted and declined invitations as live personal accounts
+- Done (`6a31ad5`): ACCEPTED excluded; DECLINED kept (still a live personal account), its state shown.
 - CONFIRMED (logic). 2867-2871: every `userinvitations` row becomes HIGH regardless of `state`; the Cloud Identity states are NOT_YET_SENT, INVITED, ACCEPTED, DECLINED, and an ACCEPTED invitation is an account already converted. The test only uses NOT_YET_SENT. Fix: exclude ACCEPTED; consider listing DECLINED separately.
 
-### AUD-20 `[ ]` BEC filter heuristic misses `from:` in the query and fires on archive plus the word "account"
+### AUD-20 `[x]` BEC filter heuristic misses `from:` in the query and fires on archive plus the word "account"
+- Done (`d99c7cf`): from: terms in the query are senders; account, statement, transfer, urgent need trash or mark-as-read. Not mirrored in m365_scope.py (other repository). The automated review asked to keep transfer and urgent firing on archive alone; kept as planned, raised at ship.
 - CONFIRMED (reproduced). `suspicious_filter` 2812-2817: `query from:attacker@outlook.com` plus trash is not flagged because the sender rule reads only the `from` column; `subject Your monthly account statement` plus archive plus label Bank is flagged HIGH "hides mail about 'account'", the routine newsletter-filing pattern the docstring says should be clean; `query label:account-updates` plus archive likewise. Fix: parse `from:` tokens out of the query and apply the sender rule to them; require trash or markread (not archive alone) for the weaker words (`account`, `statement`, `transfer`, `urgent`), keeping archive-alone for `invoice`, `payment`, `remittance`, `wire`, `proof of payment`.
 
-### AUD-21 `[ ]` Google's default password minimum (8) is never flagged because `policy_defaults.json` types it as a string
+### AUD-21 `[x]` Google's default password minimum (8) is never flagged because `policy_defaults.json` types it as a string
+- Done (`aae6bc5`): 8 and 100 as numbers, expiry "0s"; test with no API row.
 - CONFIRMED (coordinator verified both files). `policy_defaults.json:185-192` has `"minimumLength": "8"`, `"maximumLength": "100"`, `"expirationDuration": "0"`; `check_password_policy` 4543-4545 requires `isinstance(minlen, int)`. With no `security.password` row in `policies.csv` the resolved root value is the string default and "minimum length is 8 characters" is never reported. `"0"` also does not match `_duration_seconds`'s `(\d+)s` (should be `"0s"`), harmless only because 0 is "never". On tenants where the API returns SYSTEM rows (the dev tenant did) the bug is masked. Fix: integers and `"0s"` in the defaults file; test a `security.password` fixture with no API row.
 
-### AUD-22 `[ ]` `policy_defaults.json` carries scrape artefacts and omissions
+### AUD-22 `[x]` `policy_defaults.json` carries scrape artefacts and omissions
+- Done (`d66584c`): work_data_operation_type rows and the enforcedFrom "Unset" default removed (Google's page, read raw 2026-11-04, names no field for the first and gives "Unset" as prose). Not done: groupsSpoofingVisibilityType, absent from Google's page (ScubaGoggles only), so not added to a file sourced from that page.
 - CONFIRMED for the artefacts; omissions PLAUSIBLE. Lines 214-237: eight `work_data_operation_type.*` entries with the field `"true": ""` (no Google setting has a field named `true`); they are appended as real settings at `/`. Line 200: `"enforcedFrom": "Unset"` is prose, not an API value (ScubaGoggles uses `1970-01-01T00:00:00Z`), and leaks into the `2sv-policy-map` INFO card. Lines 164-166: `gmail.spoofing_and_authentication` lacks `groupsSpoofingVisibilityType: "PRIVATE_GROUPS_ONLY"`, which ScubaGoggles includes as Google's default. Every other key/value compared matched ScubaGoggles' defaults.
 
-### AUD-23 `[ ]` The "Settings to check by hand" card contradicts the baseline finding in the same report
+### AUD-23 `[x]` The "Settings to check by hand" card contradicts the baseline finding in the same report
+- Done (`50f133f`): the five settings the baseline judges are off the card; its text says the rest are not judged, not that the API hides them.
 - CONFIRMED (reproduced from one fixture). 4831-4901: the INFO card says the API does not expose settings that the same report now judges: automatic forwarding (GWS.GMAIL.11.1), invitations to non-Google accounts (DRIVEDOCS.1.4), general access default (DRIVEDOCS.1.8), Access Checker (DRIVEDOCS.1.6), group creation (GROUPS.2.1), plus external recipient warning, primary-calendar sharing and `externalSharingMode`; POP/IMAP exist as `gmail.imap_access`/`gmail.pop_access`. The list predates v1.7.0 ("checked 2026-09-14"). Fix: drop the rows now covered or reword to "judged above; confirm in the console".
 
-### AUD-24 `[ ]` DWD scope parsing splits on commas, but GAM joins multi-valued report parameters with spaces
+### AUD-24 `[x]` DWD scope parsing splits on commas, but GAM joins multi-valued report parameters with spaces
+- Done (`c70c131`): split on whitespace and commas. Still PLAUSIBLE that GAM sends a multiValue; harmless either way.
 - PLAUSIBLE (GAM's `' '.join(item['multiValue'])` at 14911 is confirmed; whether `API_SCOPES` arrives as a multiValue could not be confirmed offline). `check_dwd_grants` 5405-5407: a grant of `https://mail.google.com/ https://www.googleapis.com/auth/drive` becomes one unmatched string, "Scopes: 1", "Broad access: none", INFO instead of MEDIUM, the exact grant the check exists for. Zero-cost fix: `re.split(r"[\s,]+", ...)` and a space-joined fixture in the test.
 
-### AUD-25 `[ ]` The printed PDF loses the header and every severity label
+### AUD-25 `[x]` The printed PDF loses the header and every severity label
+- Done (`841f220`): print: header dark on white, pills dark text with border and print-color-adjust exact; checked with a headless Chrome print to PDF. STYLE is shared with m365_scope.py, which is not changed.
 - PLAUSIBLE (CSS unambiguous; depends on the browser's print-backgrounds setting, which is off by default in Chrome, Edge and Firefox). 6086-6091, 6102-6103, print block 6126-6131: `header.page` and `.sev` pills are white text on background colours; there is no `print-color-adjust: exact` and `@media print` does not recolour them, so the title, customer ID, dates, credit and every CRITICAL/HIGH/MEDIUM/INFO pill print white on white. The README says "Print it for a clean PDF" and the footer says "Print this page for a PDF copy." Fix: `print-color-adjust: exact; -webkit-print-color-adjust: exact;` on those elements, plus a dark-text fallback in `@media print`.
 
-### AUD-26 `[ ]` `open_report` can block indefinitely on a headless host with a console browser
+### AUD-26 `[x]` `open_report` can block indefinitely on a headless host with a console browser
+- Done (`fa6930d`): no browser on a non-macOS POSIX host without DISPLAY/WAYLAND_DISPLAY.
 - PLAUSIBLE (stdlib mechanics confirmed from the 3.13 source). 6736-6753 `webbrowser.open`: with `DISPLAY` unset but `TERM` set, `webbrowser` registers `www-browser`, `links`, `elinks`, `lynx`, `w3m` if present and `GenericBrowser.open` waits on the process. A run started over ssh without `--no-open` opens the report in the terminal browser and waits for `q`, once per tenant under `--all`. Fix: skip opening when neither `DISPLAY` nor `WAYLAND_DISPLAY` is set on Linux, or open in a daemon thread.
 
 ## B3. Low
