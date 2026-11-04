@@ -45,7 +45,7 @@ for cid, text, lang, expect, mode, src in CASES:
         ok.append(cid)
     elif got == 'CANNOT TELL' and floor:
         honest.append(cid)  # score.py policy: CANNOT TELL is never an under-warning, it tells the reader to look
-    elif SEV[got] < SEV[expect] and not (expect == 'CANNOT TELL' and got in ('READ-ONLY', 'CHANGES') and mode == 'exact'):
+    elif SEV[got] < SEV[expect]:  # CHK-18: CANNOT TELL coming back READ-ONLY (gam batch -) is an under-warning too
         under.append((cid, text, expect, got, src, detail))
     else:
         over.append((cid, text, expect, got, src, detail))

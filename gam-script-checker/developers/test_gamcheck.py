@@ -294,6 +294,21 @@ def test_crash_is_cannot_tell():
     finally:
         g.Checker.check_file = saved
         p.unlink()
+    # CHK-15: paste mode is guarded the same way
+    saved, stdin = g.Checker.check_text, sys.stdin
+    g.Checker.check_text = lambda self, *a, **k: (_ for _ in ()).throw(RuntimeError('forced'))
+    sys.stdin = io.TextIOWrapper(io.BytesIO(b'gam print users\n'))
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            assert g.main(['-']) == g.UNKNOWN
+    finally:
+        g.Checker.check_text, sys.stdin = saved, stdin
+    # a CSV field over csv's size limit leaves the row count unknown instead of crashing
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / 'big.csv').write_text('email,x\nbob@example.com,' + 'y' * 200000 + '\n', encoding='utf-8')
+        found = g.Checker().check_text('gam csv big.csv gam delete user ~email\n', '<t>', 'shell', [Path(d)])
+        assert g.verdict(found) == g.DESTRUCTIVE, [f.what for f in found]
 
 
 def test_checker_is_inert():
@@ -670,6 +685,18 @@ AUDIT_2026_11 += [
     ('gam info domain\nx=$((1<<2)); cat <<EOF\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\nfor ((i=0;i<<1;i++)); do cat <<EOF\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\ncat <<E`x`\nE\nit\'s\nE`x`\ngam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    # CHK-16: python3 - <<'EOF' runs the heredoc as Python, so the Python reader reads it
+    ('gam info domain\npython3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nsudo /usr/bin/python3 -u <<EOF\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\npython3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "print", "users"])  # it\'s fine\nEOF\ngam print users', 'shell', g.READ, 'exact'),
+    # an unquoted <<EOF body still runs $(...) in the shell; only the heredoc that feeds python is read as Python
+    ('gam info domain\npython3 - <<EOF\nprint("$(gam delete user bob@example.com)")\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\npython3 - <<EOF\n$(gam delete user bob@example.com)\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\npython3 -mjson.tool <<EOF\n{"a": "$(gam delete user bob@example.com)"}\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\npython3 - <<\'A\'; cat <<\'B\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nA\ngam print users\nB', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\ncat <<\'A\'; python3 - <<\'B\'\nit\'s text\nA\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nB', 'shell', g.DESTRUCTIVE, 'floor'),
+    # a heredoc that never finds its end marker was probably misread, so the script cannot be read as safe
+    ('gam info domain\ncat <<E`x y`\nbody\nE`x y`\nx="a\nb # c"; gam print users', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\ncat <<E`x`\nE\nx="a\nE`x`\nmsg=\'a # b\'; gam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
     ('gam info domain\nx=`cat <<EOF`\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\ncat <<A <<B\nit\'s\nA\nbody\nB\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
@@ -790,6 +817,12 @@ def test_audit_2026_11(checker):
     checker.check_text('import subprocess\ndef f():\n' + body, '<t>', 'python')
     if time.monotonic() - start > 10:
         failures.append(f'3000 bindings took {time.monotonic() - start:.1f}s')
+    # CHK-14: a 2 MB users list used to take about a minute (shlex grows a token a character at a time)
+    users = ','.join(f'u{i}@example.com' for i in range(150000))
+    start = time.monotonic()
+    got = g.verdict(checker.check_text(f'gam users {users} delete messages query x doit\n', '<t>', 'shell'))
+    if time.monotonic() - start > 10 or got != g.DESTRUCTIVE:
+        failures.append(f'2 MB token: {g.LEVEL_NAMES[got]} in {time.monotonic() - start:.1f}s')
     # a called name is resolved once per function, not once per call
     body = 'run = subprocess.run\n' * 2000 + 'run(["gam", "print", "users"])\n' * 2000
     start = time.monotonic()

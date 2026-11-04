@@ -389,8 +389,11 @@ def count_rows(path_text, base_dirs):
         for base in base_dirs:
             p = (base / cand) if not Path(cand).is_absolute() else Path(cand)
             if p.is_file():
-                with p.open(encoding='utf-8-sig', errors='replace', newline='') as f:
-                    return max(sum(1 for _ in csv.reader(f)) - 1, 0)
+                try:
+                    with p.open(encoding='utf-8-sig', errors='replace', newline='') as f:
+                        return max(sum(1 for _ in csv.reader(f)) - 1, 0)
+                except (csv.Error, OSError):  # an unreadable CSV or a field over csv's limit: row count unknown
+                    return None
     return None
 
 
@@ -1118,19 +1121,25 @@ def _logical_lines(text, lang):
         text = re.sub(r'<#.*?#>', lambda m: '\n' * m.group(0).count('\n'), text, flags=re.S)
     cont = {'shell': '\\', 'gambatch': None, 'powershell': '`', 'batch': '^'}[lang]
     out, buf, start, quote, heredoc = [], '', None, '', None
+    bodies = {}  # line heredocs start on -> one [(line, text as written)] list per heredoc, in order
     for n, raw in enumerate(text.splitlines(), 1):
         if heredoc:
             # a heredoc or here-string body: read line by line, and an apostrophe in it opens no quote
             word, tabs = heredoc[0]
             if (raw.lstrip('\t') if tabs else raw) == word or (lang == 'powershell' and raw.lstrip().startswith(word)):
                 heredoc = heredoc[1:] or None
+                if heredoc:
+                    bodies[heredoc_line].append([])
+            else:
+                bodies[heredoc_line][-1].append((n, raw.lstrip('\t') if tabs else raw))
             raw, quote = _strip_comment(raw, lang)[0], ''
         else:
             carried = quote
             raw, quote = _strip_comment(raw, lang, quote)
             start_doc = None if carried else _heredoc_start(raw, lang)
             if start_doc:
-                heredoc, quote = start_doc, ''
+                heredoc, quote, heredoc_line = start_doc, '', n
+                bodies[n] = [[]]
         stripped = raw.rstrip()
         if start is None:
             start = n
@@ -1142,7 +1151,15 @@ def _logical_lines(text, lang):
         buf, start = '', None
     if buf:
         out.append((start, buf))
+    out = _Lines(out)
+    out.unclosed, out.bodies = (heredoc_line if heredoc else None), bodies
     return out
+
+
+class _Lines(list):
+    """Logical lines; unclosed is the line of a heredoc that never found its end marker, else None;
+    bodies maps the line heredocs start on to each heredoc's body lines as written, in order."""
+    unclosed, bodies = None, {}
 
 
 def _ansi_c_quotes(line):
@@ -1173,6 +1190,9 @@ def _ansi_c_quotes(line):
     return ''.join(out)
 
 
+LONG_RUN = re.compile(r"""[^\s'"\\;&|()<>$`\x01]{4096,}""")
+
+
 def _tokenise(line, lang):
     """Split a line into words and shell punctuation; unbalanced quotes fall back to whitespace."""
     posix = lang in ('shell', 'gambatch')
@@ -1181,6 +1201,11 @@ def _tokenise(line, lang):
     line = FD_REDIRECT.sub(r'\1', line)
     if lang == 'shell' and "$'" in line:
         line = _ansi_c_quotes(line)
+    # shlex grows a token one character at a time, so a 1 MB users list took 20 s: long runs of
+    # plain characters (nothing shlex would change) stand in as short markers and are put back after.
+    runs = []
+    if '\x01' not in line:
+        line = LONG_RUN.sub(lambda m: runs.append(m.group(0)) or f'\x01{len(runs) - 1}\x01', line)
     try:
         lex = shlex.shlex(line, posix=posix, punctuation_chars=';&|()<>')
         lex.whitespace_split = True
@@ -1188,6 +1213,8 @@ def _tokenise(line, lang):
         toks = list(lex)
     except ValueError:
         toks = line.split()
+    if runs:
+        toks = [re.sub(r'\x01(\d+)\x01', lambda m: runs[int(m.group(1))], t) for t in toks]
     if not posix:
         toks = [t[1:-1] if len(t) >= 2 and t[0] == t[-1] and t[0] in '"\'' else t for t in toks]
     return toks
@@ -1486,6 +1513,11 @@ class Checker:
         lines = _logical_lines(text, lang)
         gam_vars, wrappers, wrapper_lines = self._shell_aliases(lines, lang)
         findings, code_lines = [], []
+        if lines.unclosed:
+            # a heredoc that never ends is most likely an end marker this reader got wrong, so the
+            # quoting of every line after it is in doubt
+            findings.append(Finding(ctx.file, lines.unclosed, UNKNOWN, 'a heredoc starts here and never ends',
+                                    note='the lines after it may be text, not commands; check where it was meant to end'))
         dead, mode_note = _mode_scope(lines, argv) if argv is not None else (set(), '')
         if mode_note:
             findings.append(Finding(ctx.file, 0, READ, mode_note, aside='note'))
@@ -1529,6 +1561,15 @@ class Checker:
                                                 short(seg), note='handed to another program (bash -c, ssh, Start-Process); check the inner command on its own'))
                     elif (script := self._script_path(seg)) is not None:
                         findings.extend(ctx.follow_script(script, n, short(seg), seg))
+                    elif n in lines.bodies and self._stdin_python(seg) and \
+                            (k := sum(t in ('<<', '<<-') for s in segments[:i + 1] for t in s)) and k <= len(lines.bodies[n]):
+                        # python3 - <<'EOF' runs that heredoc as a program, so it is also read as Python (CHK-16);
+                        # the shell reader still reads the body, since an unquoted <<EOF runs $(...) in it first
+                        doc = lines.bodies[n][k - 1]
+                        for f in self.check_text('\n'.join(t for _, t in doc) + '\n', ctx.file, 'python',
+                                                 ctx.base_dirs, ctx.depth + 1):
+                            f.line = doc[f.line - 1][0] if 0 < f.line <= len(doc) else n
+                            findings.append(f)
                     elif (runner := self._piped_shell(seg, seps[i - 1] if i else '')) is not None:
                         findings.append(Finding(ctx.file, n, UNKNOWN, f'runs the text piped into {runner} as code',
                                                 short(seg), note='check the piped text on its own'))
@@ -1680,6 +1721,19 @@ class Checker:
         if re.fullmatch(r'\$\{?[A-Za-z_]\w*(?:[:#%/^,][^}]*)?\}?|%[A-Za-z_]\w*%|\$env:[A-Za-z_]\w*', tok, re.I):
             return tok
         return None
+
+    @staticmethod
+    def _stdin_python(seg):
+        """True when the segment is python reading its program from standard input (python3 -, python3 -u)."""
+        k = 0
+        while k < len(seg) and (re.fullmatch(r'[A-Za-z_]\w*=.*', seg[k]) or seg[k].lower() in PREFIX_WORDS - SCRIPT_RUNNERS):
+            k += 1
+        if k >= len(seg) or not re.fullmatch(r'(?i)python[\d.]*|py', re.split(r'[\\/]', seg[k].strip('`"\''))[-1].removesuffix('.exe')):
+            return False
+        args = seg[k + 1:]
+        # -c CODE and -m MOD, also glued (-mjson.tool) or in a cluster (-uc), mean the program is not stdin
+        return all(t.startswith('-') for t in args) and \
+            not any(t != '-' and not t.startswith('--') and re.search(r'[cm]', t[1:]) for t in args)
 
     @staticmethod
     def _drop_redirects(seg):
@@ -2615,6 +2669,15 @@ def _discard_input():
     return data.decode('utf-8', errors='replace').replace('\r', '\n')
 
 
+def _guarded(check, name):
+    """Run one check; a checker bug must read as CANNOT TELL, never as a mild exit code (paste and file mode alike)."""
+    try:
+        return check()
+    except Exception as e:
+        return [Finding(name, 0, UNKNOWN, f'gamcheck could not read this script ({type(e).__name__}: {e})',
+                        note='report this at the repository; the verdict is not a reading of the script')]
+
+
 def main(argv=None):
     """Check each script named on the command line; exit with the worst verdict."""
     if sys.version_info < (3, 9):
@@ -2649,7 +2712,7 @@ def main(argv=None):
             curly = text.translate(STRAIGHTEN) != text
             straight = PROMPT_PREFIX.sub('', text.translate(STRAIGHTEN))
             lang = Checker.language(Path(''), straight)
-            findings = checker.check_text(straight, s, lang)
+            findings = _guarded(lambda: checker.check_text(straight, s, lang), s)
             print(f'Read {len(text.splitlines())} line(s) as {lang}.', file=sys.stderr)
             if curly:
                 findings.append(Finding(s, 0, UNKNOWN, 'the paste contains curly quotes',
@@ -2659,11 +2722,7 @@ def main(argv=None):
             worst = max(worst, UNKNOWN)
             continue
         else:
-            try:
-                findings = checker.check_file(Path(s))
-            except Exception as e:  # a checker bug must read as CANNOT TELL, never as a mild exit code
-                findings = [Finding(s, 0, UNKNOWN, f'gamcheck could not read this script ({type(e).__name__}: {e})',
-                                    note='report this at the repository; the verdict is not a reading of the script')]
+            findings = _guarded(lambda: checker.check_file(Path(s)), s)
         worst = max(worst, verdict(findings))
         if opts.json:
             reports.append({'file': s, 'gam_version': checker.tables.version, 'verdict': LEVEL_NAMES[verdict(findings)],

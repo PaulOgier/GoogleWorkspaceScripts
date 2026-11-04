@@ -45,3 +45,6 @@ google-workspace-offboarding/node_modules/
 
 # Local audit reports and working notes; never on GitHub.
 google-workspace-offboarding/docs/
+
+# GAM Script Checker: scratch scripts the test suite and local runs write; never shipped (CHK-19).
+gam-script-checker/developers/local-samples/
