@@ -283,7 +283,8 @@ can list (none active, or none with a Drive licence) needs the flag. It adds
 the auditing admin as organizer, scans, and removes the grant again. Just
 before granting, it checks the drive's live permissions: an admin who is
 already a member (added since the ACLs were collected) is scanned as that
-member, with no grant and no removal. Without the flag, those drives are
+member, with no grant and no removal; if that check fails, the drive is
+left unscanned rather than granted. Without the flag, those drives are
 reported **UNSCANNED**.
 
 Backup verification codes are never saved to the run directory: the
