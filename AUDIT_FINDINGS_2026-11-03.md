@@ -690,6 +690,7 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 - CHK-01 live on Linux GNU readline: Ctrl+D within a second of the paste's blank line hung paste mode, since Linux drops a line-mode EOF once readline switches line mode off; the wait now runs with line editing off (`06901cf`). A one-shot paste with a blank line, with and without that Ctrl+D, and the same paste into cmd on Windows (ConPTY over ssh): DESTRUCTIVE, tail checked, nothing run by the shell.
 - Linux 3.14.4, macOS 3.9.6 and 3.14.7, Windows 3.14.5 on the `94dc2c0` zip: suite, blind set 0 under-warned, 345 corpus pastes 0 under-warned, terminal paste 16/16.
 - Left as is: a paste that stalls over a second after its blank line (README states it); a sudo user named `python3`; over-warnings on `find -exec gam`, `parallel gam` and two-level Python wrappers.
+- Pre-ship round: a second review found that a heredoc, `-c` string or Perl/Node code run by a program the checker does not follow (uv run, docker run, an alias, a subshell) read READ-ONLY when it ran gam from a quoted argument list. Any such list outside a heredoc the Python reader parsed now reads CANNOT TELL. The Python reader reads CANNOT TELL when `executable=`, `preexec_fn=`, `**opts`, `*rest` or a third positional argument could change what runs (`c826ec9`..`8e3f19a`). Same VM results on `8e3f19a`.
 
 ---
 
