@@ -5624,6 +5624,16 @@ def check_licence_waste(ctx: RunContext) -> List[Finding]:
     for row in ctx.rows("licenses"):
         sku = _norm_sku(col(row, "skuDisplay", "skuId"))
         assigned[sku] = assigned.get(sku, 0) + 1
+    # GAM prints seat counts only for G Suite Basic, Workspace Enterprise
+    # Plus, G Suite Business and Vault (CUSTOMER_LICENSE_MAP, GAM 7.50.00).
+    # A paid licence assigned here with no seat count was not judged, so the
+    # check must not read as checked and clean.
+    counted = {_norm_sku(name) for name in owned}
+    for sku in assigned:
+        if sku and "cloud identity" not in sku and not any(
+                c and (c == sku or c in sku or sku in c) for c in counted):
+            ctx.consulted.append(("domaininfo", False))
+            break
     hits = []
     for sku_name, seats in sorted(owned.items()):
         if re.search(r"cloud identity(?! premium)", sku_name.lower()):

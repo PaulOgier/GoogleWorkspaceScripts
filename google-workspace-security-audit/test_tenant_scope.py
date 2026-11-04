@@ -1444,15 +1444,27 @@ b@example.com,101001,Cloud Identity,1010010001,Cloud Identity""")
         self.assertEqual("49", row["Unused"])
 
     def test_small_gap_clean(self):
-        self.write_domaininfo("Business Starter Licenses: 10\n")
+        self.write_domaininfo("G Suite Business Licenses: 10\n")
         self.write_csv("licenses", """userId,skuId,skuDisplay
-a@example.com,1010020027,Business Starter
-b@example.com,1010020027,Business Starter
-c@example.com,1010020027,Business Starter
-d@example.com,1010020027,Business Starter
-e@example.com,1010020027,Business Starter
-f@example.com,1010020027,Business Starter""")
+a@example.com,Google-Apps-Unlimited,G Suite Business
+b@example.com,Google-Apps-Unlimited,G Suite Business
+c@example.com,Google-Apps-Unlimited,G Suite Business
+d@example.com,Google-Apps-Unlimited,G Suite Business
+e@example.com,Google-Apps-Unlimited,G Suite Business
+f@example.com,Google-Apps-Unlimited,G Suite Business""")
         self.assertEqual([], ts.check_licence_waste(self.ctx))
+        self.assertTrue(all(u for _, u in self.ctx.consulted))
+
+    def test_edition_without_seat_count_is_neither_flagged_nor_clean(self):
+        # AUD-03: GAM prints no seat line for Business Standard.
+        self.write_domaininfo("User counts as of 2026-11-01:\n"
+                              "  Total Users: 20\n")
+        self.write_csv("licenses", "userId,skuId,skuDisplay\n" + "\n".join(
+            f"u{i}@example.com,1010020028,Google Workspace Business Standard"
+            for i in range(20)))
+        ts.run_checks(self.ctx)
+        self.assertNotIn(ts.CHECK_TITLES["check_licence_waste"],
+                         {t for t, _ in self.ctx.clean_checks})
 
     def test_no_domaininfo_no_finding(self):
         self.write_csv("licenses", """userId,skuId,skuDisplay

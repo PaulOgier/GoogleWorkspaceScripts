@@ -175,7 +175,10 @@ the full module registry with keys and tiers.
 - Licensed accounts that were never signed into, or dormant for more than
   90 days [Medium]
 - Suspended accounts still holding paid licences [Medium]
-- Licences owned but not assigned to anyone (licence waste) [Medium]
+- Licences owned but not assigned to anyone (licence waste) [Medium]. GAM
+  reports owned seats only for G Suite Basic, Workspace Enterprise Plus,
+  G Suite Business and Vault; on any other edition the check is not judged
+  and is not listed as clean.
 - Suspended accounts still holding data or Shared Drive roles [Info]
 - Accounts created in the last 30 days, and users left in the root
   organisational unit [Info]
