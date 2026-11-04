@@ -301,7 +301,8 @@ def test_checker_is_inert():
     import ast
     tree = ast.parse((ROOT / 'gamcheck.py').read_text(encoding='utf-8'))
     allowed = {'argparse', 'fnmatch', 'ast', 'csv', 'json', 're', 'shlex', 'sys', 'dataclasses', 'pathlib', 'readline',
-               'contextlib', 'io'}
+               'contextlib', 'io',
+               'select', 'termios', 'msvcrt', 'time'}  # terminal input only: waiting for and discarding pasted lines
     imported = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -370,6 +371,24 @@ def test_paste():
     assert code == g.READ, out
     code, _, err = run('', '-')
     assert code == g.UNKNOWN and 'nothing was pasted' in err
+    # CHK-01: lines still arriving after the blank line are read and checked, never left for the shell
+    import builtins
+    feed = iter(['gam print users', '', 'echo x; gam delete user bob@example.com\ngam info domain', ''])
+    calls = []
+    saved = builtins.input, g._input_pending, g._discard_input, sys.stdin
+    builtins.input = lambda *a: next(feed)
+    g._input_pending = lambda t: calls.append(t) or len(calls) < 2
+    g._discard_input = lambda: calls.append('discard') or 'gam undelete user bob@example.com'  # pasted without Enter
+    sys.stdin = type('Tty', (), {'isatty': staticmethod(lambda: True)})()
+    try:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            text = g.read_paste()
+    finally:
+        builtins.input, g._input_pending, g._discard_input, sys.stdin = saved
+    assert 'gam delete user bob@example.com' in text and 'gam info domain' in text, text
+    assert 'gam undelete user' in text, text
+    assert '3 more pasted line' in err.getvalue() and 'discard' in calls, (err.getvalue(), calls)
     # Prompts copied from forum posts along with the command.
     for prompt in ('$ ', '> ', 'PS C:\\GAM7> ', 'C:\\GAM7>'):
         code, out, _ = run(prompt + 'gam user bob@example.com delete messages query x doit\n', '-')
@@ -650,6 +669,8 @@ AUDIT_2026_11 += [
     ('gam info domain\nx=$((a<<b))\ny="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\nx=$((1<<2)); cat <<EOF\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\nfor ((i=0;i<<1;i++)); do cat <<EOF\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\ncat <<E`x`\nE\nit\'s\nE`x`\ngam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\ncat <<E`x`\nE\nx="a\nE`x`\nmsg=\'a # b\'; gam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
     ('gam info domain\nx=`cat <<EOF`\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\ncat <<A <<B\nit\'s\nA\nbody\nB\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
     # Python run functions reached by another name, and every os.exec/spawn form

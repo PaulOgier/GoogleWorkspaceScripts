@@ -1093,7 +1093,9 @@ def _heredoc_start(line, lang):
             rest = line[m.end():].lstrip(' \t')
             # shortcut: a delimiter must start with a letter, _ , a quote or \; bash takes any word, but a
             # heredoc wrongly opened would swallow the rest of the file, and one missed only reads its body
-            w = re.match(r"""(?:'[^']*'|"(?:\\.|[^"\\])*"|\\.|[^\s;&|<>()'"\\`])+""", rest)
+            # a backtick ends the word only inside an open `...` substitution: cat <<E`x` waits for E`x`
+            tick = '`' if before.count('`') % 2 else ''
+            w = re.match(r"""(?:'[^']*'|"(?:\\.|[^"\\])*"|\\.|[^\s;&|<>()'"\\%s])+""" % tick, rest)
             if not w or not re.match(r"""['"\\A-Za-z_]""", rest):
                 continue
             word = re.sub(r"""'([^']*)'|"((?:\\.|[^"\\])*)"|\\(.)""",
@@ -2525,18 +2527,92 @@ def read_paste():
         pass
     print('Paste the gam command(s), then press Enter on an empty line.\n'
           '(For a whole script with blank lines in it, run: gamcheck yourscript.sh)', file=sys.stderr)
-    lines = []
-    while True:
+    # A paste with a blank line in it arrives all at once: lines left unread in the terminal
+    # would run in the shell after gamcheck exits, under its verdict. So after the blank line,
+    # anything still arriving is read and checked too, and the rest is discarded.
+    lines, extra, ended = [], 0, False
+    # shortcut: a paste that pauses over 1 s after its blank line (a slow ssh link) can still beat this
+    while not (ended and not _input_pending(1.0)):
         try:
-            line = input()
+            got = input()
         except EOFError:
             break
-        if not line.strip():
-            if lines:
-                break
-            continue
-        lines.append(line)
+        for line in got.split('\n'):  # readline with bracketed paste can hand over several lines at once
+            if not line.strip():
+                ended = ended or bool(lines)
+                continue
+            lines.append(line)
+            extra += ended
+    for line in _discard_input().splitlines():  # a last line pasted without Enter is still checked
+        if line.strip():
+            lines.append(line)
+            extra += 1
+    if extra:
+        print(f'gamcheck: {extra} more pasted line(s) came after the blank line; they are checked too,'
+              ' and nothing was left for the shell to run.', file=sys.stderr)
     return '\n'.join(lines) + '\n'
+
+
+def _input_pending(timeout):
+    """True when more pasted text reaches the terminal within timeout seconds."""
+    try:
+        import msvcrt
+    except ImportError:
+        import select
+        try:
+            return bool(select.select([sys.stdin], [], [], timeout)[0])
+        except (OSError, ValueError):
+            return False
+    import time
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if msvcrt.kbhit():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def _discard_input():
+    """Take everything still waiting on the terminal, so the shell cannot run it after gamcheck exits.
+
+    Returns that text, including a last line pasted without Enter, which the terminal holds back
+    from a normal read: it is read with line editing briefly off, then the input queue is flushed.
+    """
+    try:
+        import msvcrt
+    except ImportError:
+        msvcrt = None
+    if msvcrt:
+        chars = []
+        while msvcrt.kbhit():
+            chars.append(msvcrt.getwch())
+        return ''.join(chars).replace('\r', '\n')
+    try:
+        import termios
+    except ImportError:
+        return ''
+    data = b''
+    try:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        raw = old[:3] + [old[3] & ~termios.ICANON] + old[4:6] + [list(old[6])]
+        raw[6][termios.VMIN], raw[6][termios.VTIME] = 0, 0
+        termios.tcsetattr(fd, termios.TCSANOW, raw)
+        try:
+            while len(data) < 1 << 20:
+                chunk = sys.stdin.buffer.raw.read(65536)
+                if not chunk:
+                    break
+                data += chunk
+        finally:
+            termios.tcsetattr(fd, termios.TCSANOW, old)
+            termios.tcflush(fd, termios.TCIFLUSH)
+    except (OSError, ValueError, AttributeError, termios.error):
+        try:
+            termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+        except (OSError, ValueError, termios.error):
+            pass
+    return data.decode('utf-8', errors='replace').replace('\r', '\n')
 
 
 def main(argv=None):
