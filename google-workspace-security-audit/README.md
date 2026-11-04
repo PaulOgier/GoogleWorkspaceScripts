@@ -434,7 +434,9 @@ Ctrl+C lets the module that is running finish (GAM runs in its own process
 group, so the interrupt reaches the script and not GAM), then stops. The
 report is still rendered over what was collected and the exit code is 130, so
 a scheduled run can tell "complete" from "stopped". A second Ctrl+C kills
-everything.
+everything. A temporary organizer grant is recorded in `manifest.json` before
+its removal runs and cleared only once the removal succeeds, so after either
+kind of stop `qa_report.html` still names any grant left behind.
 
 Each run writes into its own timestamped directory under
 `./tenant_audit_runs/` (change with `--output-dir`). Runs are resumable:

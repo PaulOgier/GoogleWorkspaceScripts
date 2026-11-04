@@ -1881,15 +1881,25 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
                 unscanned.append(f"{drive_name} ({drive_id}) - scan failed")
         finally:
             # Remove the temporary grant even when the scan itself failed.
+            # It is on disk as not removed until the removal succeeds, so a
+            # Ctrl+C or forced exit from here on still names it.
+            entry = {"drive": drive_name, "id": drive_id, "admin": ctx.admin}
+            stale = ctx.manifest["meta"].setdefault(
+                "temp_grant_cleanup_failed", [])
+            if not ctx.args.dry_run:
+                stale.append(entry)
+                ctx.save()
             rc, out, err = run_gam(
                 ["user", ctx.admin, "delete", "drivefileacl", drive_id,
                  ctx.admin, "adminaccess"],
                 timeout=120, dry_run=ctx.args.dry_run)
             ctx.stderr_log(mod["key"], err)
             attempted.add(drive_id)
+            if not ctx.args.dry_run and rc == 0:
+                stale[:] = [e for e in stale if e["id"] != drive_id]
+                ctx.save()
             if not ctx.args.dry_run and rc != 0:
-                cleanup_failed.append({"drive": drive_name, "id": drive_id,
-                                       "admin": ctx.admin})
+                cleanup_failed.append(entry)
                 print_error(
                     f"Could not remove the temporary organizer grant on "
                     f"Shared Drive {drive_name} ({drive_id}). Remove "

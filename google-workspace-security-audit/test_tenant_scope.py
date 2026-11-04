@@ -3254,6 +3254,57 @@ class TestTempGrantFailure(CtxTestCase):
         self.assertFalse(ts._needs_run(self.ctx, mod))
 
 
+class TestTempGrantCleanupInterrupted(CtxTestCase):
+    """AUD-05: a grant that could not be removed is on disk at once, even
+    when Ctrl+C or a forced exit follows."""
+
+    def setUp(self):
+        super().setUp()
+        self.ctx.args.grant_temp_access = True
+        self.write_csv("shareddrives", "id,name\nD1,Finance\nD2,Legal")
+        self.write_csv("shareddriveacls", "id,permission.emailAddress\n"
+                       "D1,nobody@example.com")
+        original = ts.run_gam
+        self.addCleanup(setattr, ts, "run_gam", original)
+        self.addCleanup(setattr, ts, "shutdown_requested", False)
+
+    def collect(self, on_delete):
+        def fake(args, **kw):
+            if "delete" in args:
+                return on_delete()
+            if "add" in args:
+                return 0, "", ""
+            return 0, "id,name,mimeType,hasAugmentedPermissions\n", ""
+        ts.run_gam = fake
+        return ts.collect_sd_external(
+            self.ctx, ts.MODULE_BY_KEY["shareddrive_external"])
+
+    def on_disk(self):
+        return ts.RunContext(self.run_dir, make_args()).manifest["meta"].get(
+            "temp_grant_cleanup_failed", [])
+
+    def test_failed_removal_then_ctrl_c(self):
+        def delete():
+            ts.shutdown_requested = True   # the operator presses Ctrl+C
+            return 1, "", "Delete Failed\n"
+        self.assertEqual("interrupted", self.collect(delete)[2])
+        self.assertEqual(["D1"], [e["id"] for e in self.on_disk()])
+        ok, reasons = ts.delivery_gate(self.ctx)
+        self.assertFalse(ok)
+        self.assertTrue(any("NOT removed" in r for r in reasons))
+
+    def test_forced_exit_during_removal(self):
+        def delete():
+            raise SystemExit(2)            # second Ctrl+C
+        with self.assertRaises(SystemExit):
+            self.collect(delete)
+        self.assertEqual(["D1"], [e["id"] for e in self.on_disk()])
+
+    def test_removed_grant_is_not_listed(self):
+        self.collect(lambda: (0, "", ""))
+        self.assertEqual([], self.on_disk())
+
+
 class TestSharedDriveScanAsMember(CtxTestCase):
     """A drive the admin is not in is listed as an active member, organizers
     first, with no grant; a failing member falls through to the next."""
