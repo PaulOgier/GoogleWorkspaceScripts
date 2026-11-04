@@ -133,7 +133,8 @@ run to containment, cleanup and suspension.
 - A **MANUAL ACTION** block at the end for the things GAM cannot do, such as
   capturing mail to the leaver's address after suspension (see below).
 - Exit codes a scheduler can act on: `0` success, `1` errors in one or more
-  phases, `2` fatal (nothing or little ran).
+  phases, `2` fatal (nothing or little ran), `130` stopped by Ctrl+C or
+  SIGTERM (the summary names the last phase that ran; re-run to finish).
 
 ## Requirements
 

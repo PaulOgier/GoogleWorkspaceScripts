@@ -134,6 +134,9 @@ class ScriptedGam:
         self.calls.append((list(args), kwargs))
         if self.on_call:
             self.on_call(args)
+        if offb.shutdown_requested and not kwargs.get("bypass_shutdown"):
+            # The real run_gam refuses every call after Ctrl+C unless bypassed.
+            return False, "Shutdown requested"
         if kwargs.get("dry_run", True):
             # The real run_gam returns before executing anything in dry run.
             return True, ""
@@ -443,7 +446,11 @@ class TestContainment(MainFlowCase):
         # Contained, so the run stopped at the checkpoint after the kill switch
         # without touching groups or licences.
         self.assertFalse(any("delete groups" in a or "delete license" in a for a in gam.argv()))
-        self.assertEqual(code, 0, offb.summary_errors)
+        # OFF-03: this used to exit 0 with nothing in the summary, so a
+        # scheduler read a contained-but-unsuspended account as done.
+        self.assertEqual(code, offb.EXIT_INTERRUPTED, offb.summary_errors)
+        self.assertTrue(any("INTERRUPTED" in w and "kill switch" in w
+                            for w in offb.summary_warnings), offb.summary_warnings)
 
     def test_ctrl_c_with_failed_containment_suspends_before_exit(self):
         gam = ScriptedGam()
@@ -455,7 +462,28 @@ class TestContainment(MainFlowCase):
         gam.on_call = interrupt_after_ou_move
         code = self.run_main(gam, "--doit", "--force", "--no-transfer", "--user", LEAVER)
         self.assertIn(f"update user {LEAVER} suspended on", gam.argv())
-        self.assertEqual(code, 1)
+        self.assertEqual(code, offb.EXIT_INTERRUPTED)
+
+    def test_ctrl_c_during_drive_transfer_blames_no_destination(self):
+        """OFF-03: a Ctrl+C mid-transfer used to let the email phase record
+        the valid successor as "not found" and every alias as bouncing."""
+        gam = ScriptedGam()
+        gam.rule(("print", "aliases", "user", LEAVER),
+                 (True, f"Alias,Target,TargetType\nold.name@yourdomain.com,{LEAVER},User\n"))
+
+        def interrupting_popen(cmd, **kw):
+            offb.shutdown_requested = True
+            return FakePopen("Got 1 Drive Files/Folders\n", 1)
+        code = self.run_main(gam, "--doit", "--force", "--user", LEAVER,
+                             "--all-transfer-to", SUCCESSOR, popen=interrupting_popen)
+        for claim in ("not found", "invalid", "bounce", "inconclusive"):
+            self.assertFalse(any(claim in e.lower() for e in
+                                 offb.summary_errors + offb.summary_warnings),
+                             (claim, offb.summary_errors, offb.summary_warnings))
+        self.assertEqual(code, offb.EXIT_INTERRUPTED)
+        self.assertTrue(any("INTERRUPTED" in w and "Drive transfer" in w
+                            for w in offb.summary_warnings), offb.summary_warnings)
+        self.assertEqual(self.gyb_calls, [])
 
 
 class TestLicenceHold(MainFlowCase):

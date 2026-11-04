@@ -710,7 +710,7 @@ def signal_handler(_signum, _frame):
     if shutdown_requested:
         # Second Ctrl+C, force exit
         print(f"\n{Colours.RED}Forced exit.{Colours.RESET}")
-        sys.exit(2)
+        sys.exit(EXIT_INTERRUPTED)
     shutdown_requested = True
     print(f"\n{Colours.YELLOW}[WARN] Ctrl+C received. Finishing current operation, then exiting...{Colours.RESET}")
     print(f"{Colours.YELLOW}[WARN] Press Ctrl+C again to force quit immediately.{Colours.RESET}")
@@ -4566,6 +4566,9 @@ def delete_user(email: str, dry_run: bool):
     )
     if ok:
         summary_action(f"USER DELETED: {email}")
+    elif shutdown_requested:
+        print_warning(f"Deletion CANCELLED by Ctrl+C: {email} still exists.")
+        summary_warning(f"Deletion cancelled (Ctrl+C or SIGTERM): {email} still exists")
     else:
         print_error(
             f"CRITICAL: Deletion FAILED — {email} still exists. "
@@ -5056,6 +5059,11 @@ def run_phase(name: str, fn, *args, hold: Optional[List[str]] = None, **kwargs):
 _resuspend_email: Optional[str] = None
 
 
+# Exit code of a run stopped by Ctrl+C or SIGTERM (128 + SIGINT, the shell's
+# convention); 0, 1 and 2 keep their README meanings.
+EXIT_INTERRUPTED = 130
+
+
 def finish_run(dry_run: bool) -> int:
     """Restore a temporary unsuspend, print the summary, return the exit code."""
     if _resuspend_email and not dry_run:
@@ -5064,9 +5072,17 @@ def finish_run(dry_run: bool) -> int:
     return exit_code
 
 
-def _abort_if_shutdown(dry_run: bool) -> None:
-    """Between phases: honour Ctrl+C by summarising and exiting."""
+def _abort_if_shutdown(dry_run: bool, after: str) -> None:
+    """Between phases: honour Ctrl+C or SIGTERM by summarising and exiting 130.
+
+    The summary names the interruption and the exit code is not 0, so a
+    scheduler or ticket never reads an interrupted run as done (OFF-03).
+    """
+    global exit_code
     if shutdown_requested:
+        summary_warning(f"Run INTERRUPTED (Ctrl+C or SIGTERM) after {after}: "
+                        f"no later phase ran. Re-run to finish the offboarding.")
+        exit_code = EXIT_INTERRUPTED
         sys.exit(finish_run(dry_run))
 
 
@@ -5198,6 +5214,7 @@ def main():
         run_phase("Email migration", migrate_email, user_email, email_dest, dry_run,
                   strip_labels=strip_labels, reuse_backup=reuse_backup,
                   batch_size=args.restore_batch_size, force=args.force)
+        _abort_if_shutdown(dry_run, "the email restore")
         sys.exit(finish_run(dry_run))
 
     # Resolve and validate transfer destinations BEFORE any account change.
@@ -5369,7 +5386,7 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
                            user_email, dry_run, run_timestamp)
         if result:
             cached_licences = result[1]
-    _abort_if_shutdown(dry_run)
+    _abort_if_shutdown(dry_run, "the pre-flight snapshot")
 
     # ---- Kill switch (always runs, finishes even after Ctrl+C) ------------
     containment = run_phase("Kill switch", execute_kill_switch, user_email, dry_run,
@@ -5395,7 +5412,7 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
         # suspension is the one thing that must still happen before exit.
         print_error("Shutdown requested with containment incomplete: suspending before exit.")
         run_phase("Suspension", suspend_user, user_email, dry_run, bypass_shutdown=True)
-    _abort_if_shutdown(dry_run)
+    _abort_if_shutdown(dry_run, "the kill switch")
 
     # ---- Scorched earth: short circuit after the kill switch --------------
     if args.scorched_earth:
@@ -5403,6 +5420,7 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
         run_phase("Licence removal", remove_licences, user_email, dry_run,
                   cached_licences=cached_licences)
         run_phase("Suspension", suspend_user, user_email, dry_run, bypass_shutdown=True)
+        _abort_if_shutdown(dry_run, "suspension, before deletion")
         run_phase("User deletion", delete_user, user_email, dry_run)
         return finish_run(dry_run)
 
@@ -5411,7 +5429,7 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
         summary_skip("Device management (--no-devices)")
     else:
         run_phase("Device management", manage_devices, user_email, dry_run)
-    _abort_if_shutdown(dry_run)
+    _abort_if_shutdown(dry_run, "device management")
 
     run_phase("Group removal", remove_groups, user_email, dry_run)
 
@@ -5419,7 +5437,7 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
         summary_skip("Delegate cleanup (--no-delegates)")
     else:
         run_phase("Delegate cleanup", cleanup_delegates, user_email, dry_run)
-    _abort_if_shutdown(dry_run)
+    _abort_if_shutdown(dry_run, "group removal and delegate cleanup")
 
     # ---- Local backups (BEFORE any ownership transfers) --------------------
     # These run even with --no-transfer so you can archive without moving data.
@@ -5445,7 +5463,7 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
         else:
             run_phase("Email backup (GYB, local only)", backup_email_only,
                       user_email, dry_run, hold=transfer_failures)
-    _abort_if_shutdown(dry_run)
+    _abort_if_shutdown(dry_run, "the local backups")
 
     # ---- Data transfers ----------------------------------------------------
     print_header("DATA TRANSFER DESTINATIONS")
@@ -5460,19 +5478,23 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
             summary_skip(f"{label} (declined)")
 
     transfer("drive", "Drive transfer", transfer_drive)
+    _abort_if_shutdown(dry_run, "the Drive transfer")
 
     # Shared Drives are untouched by every phase above, so report them
     # regardless of whether the My Drive transfer ran or was skipped.
     if run_phase("Shared Drive check", check_shared_drives, user_email, dry_run) is None:
         summary_warning(f"Shared Drive check did not complete for {user_email}; "
                         f"check by hand whether they solely organize any")
+    _abort_if_shutdown(dry_run, "the Shared Drive check")
 
     transfer("email", "Email migration", migrate_email,
              strip_labels=plan["email"]["strip_labels"],
              batch_size=args.restore_batch_size, force=args.force)
+    _abort_if_shutdown(dry_run, "the email migration")
     transfer("alias", "Alias transfer", transfer_aliases)
+    _abort_if_shutdown(dry_run, "the alias transfer")
     transfer("calendar", "Calendar transfer", transfer_calendar)
-    _abort_if_shutdown(dry_run)
+    _abort_if_shutdown(dry_run, "the calendar transfer")
 
     # ---- Forwarding and auto-reply (no licence hold: nothing moves) --------
     if args.no_forward:

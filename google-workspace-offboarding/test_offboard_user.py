@@ -1207,6 +1207,18 @@ class TestAliases(OffboardTestCase):
         self.assertIn("No aliases to transfer", self.actions())
 
 
+class TestDeleteUser(OffboardTestCase):
+
+    def test_ctrl_c_before_delete_reports_cancelled_not_failed(self):
+        """OFF-03(c): a refusal by the shutdown flag is a cancellation."""
+        offb.shutdown_requested = True
+        fake = FakeGam()
+        with gam(fake):
+            offb.delete_user(U, dry_run=False)
+        self.assertFalse(offb.summary_errors)
+        self.assertTrue(any("cancelled" in w for w in offb.summary_warnings))
+
+
 ###############################################################################
 # Drive transfer
 ###############################################################################
