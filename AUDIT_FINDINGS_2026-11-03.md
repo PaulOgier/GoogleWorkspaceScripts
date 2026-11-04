@@ -372,52 +372,68 @@ No Critical finding. The read-only promise holds: the only write to a tenant is 
 
 ## B3. Low
 
-### AUD-27 `[ ]` Count-based findings run over a partial (timed-out) `users.csv`
+### AUD-27 `[x]` Count-based findings run over a partial (timed-out) `users.csv`
+- Done (`4aace1b`): over a partial users module: no few-super-admins, the 2SV finding drops its percentage, the tenant card names the modules whose counts are a minimum.
 - CONFIRMED path, rare. `_module_usable` (2300) accepts `partial`; `run_gam` returns partial stdout on timeout and `collect_simple` keeps the rows, so `few-super-admins` CRITICAL, the 2SV percentage and `tenant-shape` can run over an incomplete user list. Mitigated by the delivery gate. Fix: require `ok`/`empty` for count-based findings, or add "(users module partial)" to the title.
 
-### AUD-28 `[ ]` `sd-open-settings` and `sd-download-copy-open` go silent when the restriction columns are absent
+### AUD-28 `[x]` `sd-open-settings` and `sd-download-copy-open` go silent when the restriction columns are absent
+- Done (`9f64c06`): rows with no restrictions columns record the module as unusable for both checks (`_columns_missing`), so neither is listed clean.
 - CONFIRMED behaviour, PLAUSIBLE trigger. 2662: a `shareddrives.csv` without `restrictions.*` columns yields no finding and the check lands on "Checked and clean"; a GAM field change would convert a HIGH finding into a silent clean.
 
-### AUD-29 `[ ]` `groups-no-owner` compares group addresses case-sensitively, and a partial `group_members` marks unreached groups ownerless
+### AUD-29 `[x]` `groups-no-owner` compares group addresses case-sensitively, and a partial `group_members` marks unreached groups ownerless
+- Done (`3507ce8`): owners keyed lowercased; over a partial group_members only groups the list reached are judged.
 - CONFIRMED logic (3545). GAM normally lower-cases, so this needs a mixed-case group to bite.
 
-### AUD-30 `[ ]` `_paid_licences` treats free Essentials Starter as paid
+### AUD-30 `[-]` `_paid_licences` treats free Essentials Starter as paid
+- Rejected: GAM's SKU table (`glskus.py`, read raw 2026-11-04) has no "Essentials Starter" display name; 1010060001 is "Google Workspace Essentials (formerly G Suite Essentials)", which is paid. GAM never prints the string, so the trigger does not exist.
 - CONFIRMED (3026): "Google Workspace Essentials Starter" is returned as paid, so such accounts are reported as "still holding a paid licence" or "licensed account never signed into".
 
-### AUD-31 `[ ]` Shared Drive rows in the external-share findings cite `mydrive_external.csv` as source
+### AUD-31 `[x]` Shared Drive rows in the external-share findings cite `mydrive_external.csv` as source
+- Done (`cb0471c`): source names shareddrive_external.csv, mydrive_external.csv or both, from the rows' Where column.
 - CONFIRMED (2431, 2442); the "full list is in" footer points at a file that does not contain the row.
 
-### AUD-32 `[ ]` Passkey column may not exist in the usage report
+### AUD-32 `[x]` Passkey column may not exist in the usage report
+- Done (`2a923ed`): a column the usage report lacks reads "not reported", is not counted as 0, and keeps the check off the clean list.
 - PLAUSIBLE. 3882 reads `accounts:num_passkeys_enrolled` with `or "0"`; if the Reports API does not emit it (`accounts:num_security_keys` is known to exist), every admin without a hardware key is "0 passkeys" and `admins-not-phish-resistant` fires even for passkey-only admins. A missing column should read "not reported" and not count.
 
-### AUD-33 `[ ]` Baseline rules looser than the ScubaGoggles rule they cite
+### AUD-33 `[x]` Baseline rules looser than the ScubaGoggles rule they cite
+- Done (`c4d910a`): the three rules checked against ScubaGoggles' Drive.rego and Commoncontrols.rego (raw, 2026-11-04) and added as INFO rows beside the existing ones; 2sv-policy-map copy fixed. Not done: gating app rules on the service being enabled.
 - CONFIRMED against the rego. 4427-4429 GWS.DRIVEDOCS.1.6 flags only `RECIPIENTS_OR_AUDIENCE_OR_PUBLIC` (ScubaGoggles passes only `RECIPIENTS_ONLY`); 4450-4453 DRIVEDOCS.1.4 misses `ALLOWLISTED_DOMAINS` with `allowNonGoogleInvitesInAllowlistedDomains: true`; 4417-4420 COMMONCONTROLS.11.1 does not require `allowAllInternalApps` false. Also app rules are not gated on the service being enabled (ScubaGoggles gates them), and the `2sv-policy-map` copy "Rows only appear where a policy is set" (4636-4641) is wrong since defaults add root rows with no "Set by" column.
 
-### AUD-34 `[ ]` Mistyped `--compare-with` is accepted
+### AUD-34 `[x]` Mistyped `--compare-with` is accepted
+- Done (`b26cac3`): parser.error when not a directory.
 - CONFIRMED (reproduced). `find_previous_run` 6973-6978 and `parse_args` 6692-6695: a non-existent path gives a comparison against nothing ("up from 0", "What changed since typo_dir"). `parser.error` when the path is not a directory.
 
-### AUD-35 `[ ]` `--dry-run` still runs `gam oauth info` and `check serviceaccount`
+### AUD-35 `[x]` `--dry-run` still runs `gam oauth info` and `check serviceaccount`
+- Done (`b26cac3`): gate 4 is skipped under --dry-run and says so in the table.
 - CONFIRMED (1318, 1335). Both are reads, but the README says only `gam version` and `gam info domain` run.
 
-### AUD-36 `[ ]` Backup codes do pass through a file on disk, briefly
+### AUD-36 `[x]` Backup codes do pass through a file on disk, briefly
+- Done (`6b3aac6`): wording, README and docstring: never saved to the run directory, passes through GAM's anonymous temporary output file. stdout not piped (a pipe can fill and deadlock run_gam).
 - CONFIRMED. `run_gam` 645-649 sends every command's stdout to a `TemporaryFile`, including `print backupcodes`; the collector then keeps only the count. The README's "never reach disk" is stronger than the code. Pipe stdout for that one module or soften the wording.
 
-### AUD-37 `[ ]` Light-pass modules that finish after the first Ctrl+C are not recorded
+### AUD-37 `[x]` Light-pass modules that finish after the first Ctrl+C are not recorded
+- Done (`1c5a84c`): futures still running after the cancel are recorded when they finish.
 - CONFIRMED (2228-2235): after `break` the `with` block waits for running GAM processes but their results never reach `_record`, so they are re-run on resume. Collect the remaining futures before leaving the block.
 
-### AUD-38 `[ ]` Archived users are treated as listable Shared Drive members
+### AUD-38 `[x]` Archived users are treated as listable Shared Drive members
+- Done (`890dd30`): `active` built from `_live_users`.
 - CONFIRMED logic (1741-1742 builds `active` from `suspended != true` only); with three tries per drive a drive whose organizers are all archived goes UNSCANNED when an active writer exists. Exclude `archived` as `_live_users` does.
 
-### AUD-39 `[ ]` `listed()` treats any "Does not exist" in stderr as the member having no Drive
+### AUD-39 `[x]` `listed()` treats any "Does not exist" in stderr as the member having no Drive
+- Done (`20191da`): a member counts as having no Drive only when a `User: <member>,` skip line names them.
 - PLAUSIBLE (1776): a file deleted between the listing and the `select csvfile` call makes GAM print `Does not exist` for that ID; the whole drive is retried as the next member and finally "FAILED mid-scan". Scope the marker to the `User: <member>,` line as `_NO_SERVICE_RE` does.
 
-### AUD-40 `[ ]` Classroom module with zero rows and progress lines on stdout reads as partial
+### AUD-40 `[x]` Classroom module with zero rows and progress lines on stdout reads as partial
+- Done (`c54868a`): collect_simple drops stdout ahead of a module's csv_header before judging header-only.
 - PLAUSIBLE (1540, 2069-2071): `print classroominvitations` writes "Course: X, Print 0 Classroom Invitations" lines to stdout ahead of the header; with exit 60 `is_header_only(out)` is False, so a healthy Education tenant exits 2.
 
-### AUD-41 `[ ]` A stale `shareddriveacls.csv` on resume can turn the temp grant into a membership removal
+### AUD-41 `[x]` A stale `shareddriveacls.csv` on resume can turn the temp grant into a membership removal
+- Done (`46de5a5`): live `info drivefileacl <drive> <admin> adminaccess formatjson` (syntax from GAM 7.50.00 source) before the grant; a member is scanned with no grant and no removal. Owed: confirm the output on a VM.
 - PLAUSIBLE (1861-1893): the "admin is already a direct member" case is excluded only via the previously collected ACL CSV. If the admin was added to the drive between collection and a resumed scan, the `finally` deletes the admin's real membership. Re-read the drive's ACL immediately before granting, or skip the delete when the add reports an existing permission.
 
-### AUD-42 `[ ]` Documentation drift
+### AUD-42 `[x]` Documentation drift
+- Done (`6b3bff9`): stacked risk severity and a "what does it connect to" FAQ (update check included). The hold reasons are in Paul's uncommitted README edit, which lacks the domain-list reason. Rejected: "one table per person" is not in the README. The second Ctrl+C exit code is in AUD-12; the test count is updated with the version bump.
 - CONFIRMED. README says "283 tests", the docstring says 294, the documented run executes 259 (see AUD-T01). README lists two hold reasons for `qa_report.html`; `delivery_gate` (6519-6540) has four. README says a second Ctrl+C "kills everything" without saying the exit code is 2. README says "Accounts stacking multiple risk factors [High]" but the code is MEDIUM unless an admin is in the list (3249). README does not mention the startup fetch of `raw.githubusercontent.com` (the docstring does). A super admin without 2SV and dormant appears in three findings (admin-no-2sv CRITICAL, dormant-admin HIGH, at-risk HIGH); the code comment accepts this but the README's "one table per person" promise does not.
 
 ## B4. Tests
@@ -426,7 +442,8 @@ No Critical finding. The read-only promise holds: the only write to a tenant is 
 - Done (`53ed02a`): main block at the end; both commands run every test; README count fixed.
 - CONFIRMED by the coordinator. `if __name__ == "__main__": unittest.main(verbosity=2)` sits at line 2934 of the 3486-line `test_tenant_scope.py`. The 15 test classes defined after it (`TestCsvDataRows`, `TestScanSelectionEmpty`, `TestBatchedRedirectCounting`, `TestCollectDnsStatus`, `TestCollectOrdering`, `TestLicenceWasteGating`, `TestAtRiskRecoveryFactor`, `TestAtRiskAdminRecovery`, `TestSharedDriveScanAsMember` with 10 tests, `TestTempGrantCleanup` with 3, `TestTempGrantFailure` with 2, `TestResumeUnscannedSharedDrives`, `TestTier3Batched`, `TestParseArgsGuards`, `TestPlainLogFile`) are never loaded when the file is run as `python3 test_tenant_scope.py`, which is the command the README gives: "Ran 259 tests". `python3 -m unittest test_tenant_scope` runs all 294 and they pass, so nothing is currently broken, but the skipped set includes every test of the temporary organizer grant and its removal (the audit's only write path) and of the Shared Drive scan. The other three test files in the repository have their main block on the last lines. Fix: move the main block to the end; fix the README count; consider a CI job (see CI-02).
 
-### AUD-T02 `[ ]` Tests to add, in priority order
+### AUD-T02 `[x]` Tests to add, in priority order
+- Done: every item has a test; the ones added in this section sit with their fix commits (AUD-08 to AUD-41), the rest came with AUD-01 to AUD-07.
 - A check that raises when the previous run had findings from that check (AUD-02).
 - Every "not in internal" check with `internal_domains == []` (AUD-01).
 - A group-targeted policy fixture (AUD-04); a `security.password` fixture with no API row (AUD-21).
