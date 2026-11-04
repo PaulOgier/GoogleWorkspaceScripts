@@ -2931,10 +2931,6 @@ class TestVersionsInStep(unittest.TestCase):
         self.assertEqual(header.group(1), ts.SCRIPT_VERSION)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
-
 class TestCsvDataRows(unittest.TestCase):
     def test_multiline_cell_counts_as_one_row(self):
         text = ('User,message\n'
@@ -3484,3 +3480,7 @@ class TestPlainLogFile(unittest.TestCase):
         self.assertNotIn("\x1b[", logging_text)
         self.assertIn(" [ERROR] [CRITICAL] once", logging_text)
         self.assertEqual(1, logging_text.count("[ERROR]"))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
