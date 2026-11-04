@@ -739,6 +739,8 @@ AUDIT_2026_11 += [
     ('gam info domain\n`which python3` - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n$(which python3) <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n`which sudo` tee x <<EOF\nhello\nEOF\n`date` <<EOF\nhi\nEOF', 'shell', g.READ, 'exact'),
+    ('gam info domain\n$(command -v $INTERP) - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\n$(which sudo) tee x <<EOF\nhello\nEOF\nx=$(date); cat <<EOF\nhi\nEOF', 'shell', g.READ, 'exact'),
     ('gam info domain\nx="a \\\n b"; python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
     # bash joins backslash-newline first, so a heredoc body starts after the whole logical line
     ('gam info domain\ncat <<\'A\' \\\n; python3 - <<\'B\'\na\nA\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nB', 'shell', g.DESTRUCTIVE, 'floor'),

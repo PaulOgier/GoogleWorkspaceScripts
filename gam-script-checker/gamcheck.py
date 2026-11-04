@@ -1560,7 +1560,7 @@ class Checker:
                     # the shell reader still reads the body, since an unquoted <<EOF runs $(...) in it first
                     doc = self._python_heredoc(segments[i], lines.bodies.get(n),
                                                sum(t in ('<<', '<<-') for s in segments[:i] for t in s),
-                                               segments[i - 1] if i else [])
+                                               segments[:i])
                     if isinstance(doc, str):
                         findings.append(Finding(ctx.file, n, UNKNOWN, doc, short(seg), note='check the Python it runs on its own'))
                     elif doc:
@@ -1738,7 +1738,7 @@ class Checker:
         a reason string when the checker cannot tell what it runs; else None.
 
         raw is the segment with its redirects, docs the line's heredoc bodies, before the number of
-        heredocs earlier on the line, prev the segment before it (a $(...) substitution ends there). Only options that leave the source as read are followed:
+        heredocs earlier on the line, prev the segments before it (a $(...) substitution ends there). Only options that leave the source as read are followed:
         -x skips the first line, and a later < or <<< replaces the heredoc as stdin.
         """
         seg = self._drop_redirects(raw)
@@ -1754,10 +1754,17 @@ class Checker:
         own = [j for j, t in enumerate(raw) if t in ('<<', '<<-')]
         # a substitution naming python chose the program: $(which python3) <<'EOF' reaches here as '<< EOF'
         # after a segment holding python3, `which python3` - <<'EOF' as '`which' 'python3`' '-'
+        # Fails closed: a substitution that names python or holds anything chosen at runtime ($PY, a nested
+        # substitution) is CANNOT TELL; only an all-literal one naming another program (`date`) is read on
         if docs and own:
-            tick = next((j for j in range(k + 1, len(seg)) if seg[j].endswith('`')), k) if k < len(seg) and seg[k].startswith('`') else None
-            if (tick is not None and any(is_py(t) for t in seg[k:tick + 1])) or \
-                    ((k >= len(seg) or seg[k].startswith('-')) and any(is_py(t) for t in prev)):
+            sub = None
+            if k < len(seg) and seg[k].startswith('`'):
+                tick = next((j for j in range(k + 1, len(seg)) if seg[j].endswith('`')), k)
+                sub = [t.strip('`') for t in seg[k:tick + 1]]
+            elif k >= len(seg) or seg[k].startswith('-'):
+                opener = next((j for j in range(len(prev) - 1, -1, -1) if prev[j][-1:] == ['$']), None)
+                sub = None if opener is None else [t for s in prev[opener + 1:] for t in s]
+            if sub is not None and (not sub or any(is_py(t) or '$' in t or '`' in t for t in sub)):
                 return 'the program reading this heredoc is chosen at runtime'
         if not docs or not own or k >= len(seg) or not is_py(seg[k]):
             return None
