@@ -1146,6 +1146,17 @@ class TestPolicyParsing(PolicyTestCase):
 class TestPolicyDefaults(PolicyTestCase):
     defaults_file = ts.POLICY_DEFAULTS_FILE
 
+    def test_default_minimum_length_flagged_with_no_api_row(self):
+        """AUD-21: Google's default of 8 comes from policy_defaults.json,
+        which typed it as a string, so it was never flagged."""
+        self.write_policies([("security.session_controls", "/",
+                              {"webSessionDuration": "1209600s"})])
+        findings = ts.check_password_policy(self.ctx)
+        self.assertEqual(["password-policy-weak"], self.finding_ids(findings))
+        self.assertIn("minimum length is 8",
+                      findings[0].evidence[0]["Problem"])
+        self.assertNotIn("expire", findings[0].evidence[0]["Problem"])
+
     def by_type(self):
         return {(p["type"], p["ou"]): p for p in ts._policy_settings(self.ctx)}
 

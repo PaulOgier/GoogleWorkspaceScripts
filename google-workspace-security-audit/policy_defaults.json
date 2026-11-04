@@ -186,9 +186,9 @@
    "allowReuse": false,
    "allowedStrength": "STRONG",
    "enforceRequirementsAtLogin": false,
-   "expirationDuration": "0",
-   "maximumLength": "100",
-   "minimumLength": "8"
+   "expirationDuration": "0s",
+   "maximumLength": 100,
+   "minimumLength": 8
   },
   "security.super_admin_account_recovery": {
    "enableAccountRecovery": false
