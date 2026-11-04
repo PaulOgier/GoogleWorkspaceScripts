@@ -317,7 +317,7 @@ GAM_LOOKUP = re.compile(r'(?i)\b(?:which|command\s+-v|type\s+-p|Get-Command|wher
 # an escaped \"gam\", inside another string, Ruby %w[gam ...]; anything but a plain literal list fails closed below
 GAM_LIST = re.compile(r'["\'`](?:\S*[/\\])?gam(?:\.exe|\.py)?\\?["\'`]\s*,|%[wW][\[({]\s*(?:\S*/)?gam\s')
 # a whole literal list: matching quotes, nothing after it but the end of the call or a keyword argument
-GAM_LIST_LITERAL = re.compile(r'((?:(["\'])[^"\']*\2\s*,\s*\[?\s*)*(["\'])[^"\']*\3)\s*[\])]\s*(?=\)|;|$|,\s*\w+\s*=)')
+GAM_LIST_LITERAL = re.compile(r'((?:(["\'])[^"\']*\2\s*,\s*\[?\s*)*(["\'])[^"\']*\3)\s*[\])]\s*(?=\)|;|$|,\s*\w+\s*=(?![=>~]))')
 GAM_INSIDE = re.compile(r'(?:^|[\s"\'(=])(?:\S*[/\\])?gam(?:\.exe|\.py)?\s+[A-Za-z]')
 CREDENTIAL_RE = re.compile(r'(?i)oauth2(?:service)?\.(?:txt|json)|client_secrets\.json')
 NETWORK_COMMANDS = {'curl', 'wget', 'invoke-webrequest', 'invoke-restmethod', 'iwr', 'irm', 'nc', 'ncat', 'scp', 'sftp',
