@@ -492,6 +492,13 @@ No Critical finding. The read-only promise holds: the only write to a tenant is 
 - tamingdns error shapes (AUD-14); `check serviceaccount` with no PASS/FAIL lines (AUD-15); BOM input (AUD-16); a collector that raises (AUD-17).
 - A Business Standard tenant for licence waste asserting neither flagged nor clean (AUD-03); a suspended-organizer drive (AUD-06); a space-joined `API_SCOPES` fixture (AUD-24); `check_public_files` over `shareddrive_external`.
 
+### VM phase, dev tenant (2026-11-04)
+- AUD-41: `info drivefileacl ... adminaccess formatjson` read live on GAM 7.48.20: member rc 0 with JSON `permission.role`, non-member rc 56 `Permission ID: <id>, Does not exist`. An admin whose Drive cannot open the drive gets rc 50 `Drive File/Folder ID: <id>, Show Info Failed: Does not exist`, which the check read as not a member; only the Permission ID form counts now (`47ad12e`).
+- `user <admin> check serviceaccount scopes` lines (`<url padded> PASS (1/2)`, `FAIL (2/2)`) parse correctly.
+- AUD-06: a drive whose only organizer is a group is not reported orphaned. AUD-03: an Enterprise Plus tenant with bundled Vault prints no Vault seat line and gets no Vault row.
+- Full `--grant-temp-access` runs on Linux, macOS and Windows: exit 0, delivery gate ready, every temporary grant removed (read back from the tenant), findings.csv identical apart from the admin-activity count.
+- A member removed from a Shared Drive since shareddriveacls.csv was read gets exit 60 and a header-only CSV, which read as an empty clean drive; fixed `16a139a`, with `89af07e` (exact SKU names, thousands comma, drive-level warning lines, leftover grant on resume) and `2deff86` (an admin removed since the CSV reaches the grant). 370 tests.
+
 ## B5. Improvements (not defects)
 
 - `delivery_gate` (6522-6526) only inspects modules present in the manifest, so `--skip-tier 3` or `--skip shareddrive_external` gives "Ready to send" with no Drive scan at all, while the same module failing would hold it. Hold, or name the omission in the QA verdict. `test_delivery_gate_and_exit_codes` codifies the present behaviour.
