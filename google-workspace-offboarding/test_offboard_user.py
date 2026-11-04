@@ -135,6 +135,7 @@ def clocked():
 def msg_db(backup: Path, rows):
     """Create GYB's msg-db.sqlite with one messages row per (filename, date)."""
     backup.mkdir(parents=True, exist_ok=True)
+    (backup / "msg-db.sqlite").touch()  # _gyb_db never creates a DB (OFF-20)
     with offb._gyb_db(backup / "msg-db.sqlite") as db:
         db.execute("CREATE TABLE messages(message_num INTEGER PRIMARY KEY, "
                    "message_filename TEXT, message_internaldate TIMESTAMP)")
@@ -144,6 +145,7 @@ def msg_db(backup: Path, rows):
 
 def restored_db(backup: Path, destination: str, count: int):
     """Create GYB's <dest>-restored.sqlite resume DB with `count` rows."""
+    (backup / f"{destination}-restored.sqlite").touch()
     with offb._gyb_db(backup / f"{destination}-restored.sqlite") as db:
         db.execute("CREATE TABLE restored_messages(message_num INTEGER PRIMARY KEY)")
         db.executemany("INSERT INTO restored_messages VALUES (?)",
