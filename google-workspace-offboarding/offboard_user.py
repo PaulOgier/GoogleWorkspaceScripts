@@ -169,7 +169,7 @@ Changelog
                         as it arrives; backup folders are chosen with the plan.
                         Command builder: the combinations the script refuses
                         are refused, restore-only works, PowerShell trailing
-                        backslashes are doubled. 281 tests.
+                        backslashes are doubled. 283 tests.
   2026-10-21 - v5.7.2 - Scorched earth no longer deletes the account when the
                         Shared Drive list cannot be read or parsed; it refuses
                         (exit 2), as it already did for an unreadable drive ACL.
@@ -1019,6 +1019,7 @@ def run_gam(args: List[str], dry_run: bool = True,
     """
     if shutdown_requested and not bypass_shutdown:
         return False, "Shutdown requested"
+    started_before_ctrl_c = not shutdown_requested
 
     full_cmd = [GAM_COMMAND] + args
     cmd_str = " ".join(full_cmd)
@@ -1059,7 +1060,14 @@ def run_gam(args: List[str], dry_run: bool = True,
             lower = output.lower()
             if any(p.lower() in lower for p in (non_fatal_patterns or [])):
                 return True, output
-            if suppress_summary_error:
+            if started_before_ctrl_c and shutdown_requested:
+                # Ctrl+C reached the gam child mid-call: the write may still
+                # have landed (an OU move did, on dev 2026-11-04).
+                print_warning(f"Interrupted by Ctrl+C, outcome unknown: {cmd_str}")
+                if not suppress_summary_error:
+                    summary_warning(f"Interrupted by Ctrl+C, outcome unknown "
+                                    f"(check before re-running): {cmd_str}")
+            elif suppress_summary_error:
                 # Caller flagged this call as a probe with a fallback path
                 # (e.g. validate_destination's user-then-group probe), so
                 # downgrade the red [ERROR] lines to info to avoid alarming

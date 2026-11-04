@@ -868,6 +868,27 @@ class TestKillSwitch(OffboardTestCase):
                                           bypass_shutdown=True), (True, "ok"))
         self.assertEqual(len(spawned), 1)
 
+    def test_a_child_killed_by_ctrl_c_is_outcome_unknown_not_failed(self):
+        """Dev 2026-11-04: gam printed Control-C and exit 8, yet the OU move had landed."""
+        def fake_run(cmd, **_kw):
+            offb.shutdown_requested = True
+            return subprocess.CompletedProcess(cmd, 8, stdout="", stderr="Control-C")
+
+        with mock.patch.object(offb.subprocess, "run", fake_run):
+            ok, _ = offb.run_gam(["update", "user", U, "org", "/Offboarding"], dry_run=False)
+        self.assertFalse(ok)
+        self.assertFalse(offb.summary_errors)
+        self.assertTrue(any("outcome unknown" in w for w in offb.summary_warnings),
+                        offb.summary_warnings)
+
+    def test_a_bypassed_call_that_fails_after_ctrl_c_is_still_an_error(self):
+        offb.shutdown_requested = True
+        with mock.patch.object(offb.subprocess, "run", lambda cmd, **_kw:
+                               subprocess.CompletedProcess(cmd, 1, stdout="", stderr="Failed")):
+            offb.run_gam(["update", "user", U, "suspended", "on"], dry_run=False,
+                         bypass_shutdown=True)
+        self.assertTrue(offb.summary_errors)
+
 
 ###############################################################################
 # Suspension and the re-suspend guard
