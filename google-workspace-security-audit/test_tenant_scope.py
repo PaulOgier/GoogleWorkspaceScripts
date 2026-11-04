@@ -3745,6 +3745,28 @@ class TestParseArgsGuards(unittest.TestCase):
         self.assertRejects(["--skip-tier", "three"])
 
 
+class TestManifestAtomicSave(CtxTestCase):
+    def test_failed_write_keeps_the_previous_manifest(self):
+        """AUD-13: a write cut short leaves the last good manifest."""
+        self.ctx.manifest["meta"]["customer_id"] = "C_A"
+        self.ctx.save()
+        original = Path.write_text
+
+        def half_then_fail(path, data, *a, **k):
+            original(path, data[:len(data) // 2], *a, **k)
+            raise OSError("No space left on device")
+        Path.write_text = half_then_fail
+        try:
+            self.ctx.manifest["meta"]["user_count"] = 5
+            with self.assertRaises(OSError):
+                self.ctx.save()
+        finally:
+            Path.write_text = original
+        meta = json.loads((self.run_dir / "manifest.json")
+                          .read_text(encoding="utf-8"))["meta"]
+        self.assertEqual("C_A", meta["customer_id"])
+
+
 class TestPerTenantAdmin(unittest.TestCase):
     """AUD-10: each tenants.json entry may name its own auditing admin."""
 

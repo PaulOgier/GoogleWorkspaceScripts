@@ -1068,8 +1068,12 @@ class RunContext:
     def save(self):
         self.manifest["meta"]["internal_domains"] = self.internal_domains
         self.manifest["meta"]["admin"] = self.admin
-        self.manifest_path.write_text(
-            json.dumps(self.manifest, indent=2), encoding="utf-8")
+        # Write beside, then swap: a kill, power cut or full disk mid-write
+        # must leave the previous manifest, not a truncated one (it carries
+        # the customer ID the other-customer refusal depends on).
+        tmp = self.manifest_path.with_name(self.manifest_path.name + ".tmp")
+        tmp.write_text(json.dumps(self.manifest, indent=2), encoding="utf-8")
+        os.replace(tmp, self.manifest_path)
 
     def module_status(self, key: str) -> str:
         return self.manifest["modules"].get(key, {}).get("status", "")
@@ -2191,7 +2195,7 @@ def _run_collector(ctx: RunContext, mod: Dict) -> Tuple[str, int, str, float]:
 def _record(ctx: RunContext, mod: Dict, status: str, rows: int, note: str,
             elapsed: float):
     """Manifest write, console line and the post-module hooks. Main thread
-    only: manifest.json is one file and save() is not atomic."""
+    only: manifest.json is one file and save() is not thread-safe."""
     key = mod["key"]
     if status != "dry-run":
         ctx.set_module(key, status, rows, note)
