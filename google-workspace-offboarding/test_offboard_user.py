@@ -1172,6 +1172,31 @@ class TestAliases(OffboardTestCase):
         self.assertNotIn("evan.legacy", self.actions())
         self.assertTrue(any("evan.legacy" in e for e in offb.summary_errors))
 
+    def test_ctrl_c_after_a_delete_still_recreates_that_alias(self):
+        """OFF-01: a Ctrl+C landing after `delete alias` must not stop the
+        create, or the alias is destroyed; the next alias is left alone."""
+        second = "second@yourdomain.com"
+
+        def delete(args, _kw):
+            offb.shutdown_requested = True
+            return True, ""
+
+        fake = FakeGam([
+            (("print", "aliases"),
+             (True, self.ALIAS_CSV + f"{second},{U},user\n")),
+            (("delete", "alias"), delete),
+            (("create", "alias"), (True, "Created")),
+        ])
+        with gam(fake), clocked():
+            offb.transfer_aliases(U, D, dry_run=False)
+        self.assertIn(self.ALIAS, self.actions())
+        self.assertEqual(fake.matching("create", "alias"),
+                         [f"create alias {self.ALIAS} user {D}"])
+        self.assertEqual(fake.matching("delete", "alias"), [f"delete alias {self.ALIAS}"])
+        self.assertFalse(offb.summary_errors)
+        self.assertTrue(any(second in s and "interrupted" in s
+                            for s in offb.summary_skipped), offb.summary_skipped)
+
     def test_no_aliases_from_captured_output(self):
         fake = FakeGam([(("print", "aliases"),
                          (True, stdout_only(fixture("print_aliases_none"))))])

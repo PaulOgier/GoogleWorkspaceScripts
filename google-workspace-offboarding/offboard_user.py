@@ -2930,7 +2930,13 @@ def transfer_aliases(source: str, destination: str, dry_run: bool):
 
     moved: List[str] = []
     failed: List[str] = []
-    for alias in aliases:
+    untouched: List[str] = []
+    for index, alias in enumerate(aliases):
+        # Ctrl+C is honoured only between aliases: once a delete has run, its
+        # create must run too or the alias is destroyed.
+        if shutdown_requested:
+            untouched = aliases[index:]
+            break
         ok, _ = run_gam(["delete", "alias", alias], dry_run=False,
                         capture_output=True)
         if not ok:
@@ -2944,12 +2950,13 @@ def transfer_aliases(source: str, destination: str, dry_run: bool):
                 ["create", "alias", alias, "user", destination],
                 dry_run=False,
                 capture_output=True,
-                suppress_summary_error=True
+                suppress_summary_error=True,
+                bypass_shutdown=True
             )
             if ok and "duplicate" not in output.lower():
                 created = True
                 break
-            if time.time() >= deadline or shutdown_requested:
+            if time.time() >= deadline:
                 break
             print_info(f"  {alias}: waiting for deletion to propagate, retrying...")
             time.sleep(5)
@@ -2971,6 +2978,11 @@ def transfer_aliases(source: str, destination: str, dry_run: bool):
             f"Alias transfer FAILED for: {', '.join(failed)} — mail to these "
             f"addresses will bounce until recreated on {destination}"
         )
+    if untouched:
+        print_warning(f"Interrupted: {', '.join(untouched)} not transferred "
+                      f"and still on {source}.")
+        summary_skip(f"Aliases not transferred (interrupted), still on "
+                     f"{source}: {', '.join(untouched)}")
 
 
 @contextlib.contextmanager
