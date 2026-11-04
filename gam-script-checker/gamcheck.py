@@ -953,9 +953,12 @@ class Context:
             return [Finding(self.file, line, UNKNOWN, f'scripts nested too deeply at {p.name}', command)]
         try:
             with open(p, 'rb') as fh:
-                binary = b'\0' in fh.read(8192)
+                head = fh.read(8192)
         except OSError:
-            binary = True
+            head = b'\0'
+        # bash's own rule: a NUL on the first line, or an executable header, is a program, not a script
+        binary = head.startswith((b'\x7fELF', b'MZ', b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe', b'\xca\xfe\xba\xbe')) \
+            or b'\0' in head.split(b'\n', 1)[0]
         if binary:
             return [Finding(self.file, line, UNKNOWN, f'runs {p.name}, a program file rather than a script', command)]
         at = next((i for i, t in enumerate(seg) if t.strip('`"\'') == script_tok), None)
@@ -1058,6 +1061,30 @@ def _strip_comment(line, lang, quote=''):
     return line, quote
 
 
+def _heredoc_start(line, lang):
+    """The match for a heredoc (<<WORD, <<-'WORD') or here-string (@' / @") that starts outside quotes, or None."""
+    if lang not in ('shell', 'powershell'):
+        return None
+    plain, quote, i = [], '', 0
+    while i < len(line):  # blank out quoted text, so echo "<<EOF" starts nothing
+        c = line[i]
+        if c == ('`' if lang == 'powershell' else '\\') and quote != "'":
+            plain.append('  ')
+            i += 2
+            continue
+        if c in '\'"' and quote in ('', c):
+            opening = not quote
+            quote = c if opening else ''
+            plain.append(c if (opening and lang == 'powershell' and line[i - 1:i] == '@') else ' ')
+        else:
+            plain.append(' ' if quote else c)
+        i += 1
+    plain = ''.join(plain)
+    if lang == 'shell':
+        return re.search(r'<<(-?)\s*([\'"]?)([A-Za-z_][\w.-]*)\2', plain.replace('<<<', '   ').replace('<< ', '<<'))
+    return re.search(r'@([\'"])\s*$', plain)
+
+
 def _logical_lines(text, lang):
     """Join continuation lines and drop comments, keeping the first physical line number.
 
@@ -1076,9 +1103,9 @@ def _logical_lines(text, lang):
                 heredoc = None
             raw, quote = _strip_comment(raw, lang)[0], ''
         else:
+            carried = quote
             raw, quote = _strip_comment(raw, lang, quote)
-            m = (re.search(r'<<(-?)\s*([\'"]?)([A-Za-z_][\w.-]*)\2', raw.replace('<<<', '   ')) if lang == 'shell' else
-                 re.search(r'@([\'"])\s*$', raw) if lang == 'powershell' else None)
+            m = None if carried else _heredoc_start(raw, lang)
             if m:
                 heredoc, quote = ((m.group(3), m.group(1) == '-') if lang == 'shell' else (m.group(1) + '@', False)), ''
         stripped = raw.rstrip()
@@ -1688,7 +1715,7 @@ class Checker:
             words = m.group(2).strip().strip('"\'').split() if m else []  # X=" " leaves no word
             if m and (_gam_name(words[0] if words else '', set(), set()) or GAM_LOOKUP.search(m.group(2))):
                 gam_vars.add(m.group(1).lower())
-            for m in re.finditer(r'(?:^|[;&|]\s*)alias\s+([\w-]+)=(?:\'([^\']*)\'|"([^"]*)"|([^\s;&|]+))', line):
+            for m in re.finditer(r'(?:^\s*|[;&|]\s*|\b(?:then|do|else|\{)\s+)alias\s+([\w-]+)=(?:\'([^\']*)\'|"([^"]*)"|([^\s;&|]+))', line):
                 aliases[m.group(1)] = (m.group(2) or m.group(3) or m.group(4) or '').split()
             m = re.match(r'(?i)^\s*Set-Alias\s+(?:-Name\s+)?([\w-]+)\s+(?:-Value\s+)?(\S+)', line)
             if m:
