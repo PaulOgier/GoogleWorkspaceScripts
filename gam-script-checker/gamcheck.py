@@ -1611,9 +1611,14 @@ class Checker:
         if lang != 'gambatch':
             # Fails closed: a list that runs gam (a heredoc body, a -c string, perl or node code) on a line the
             # readers above gave nothing for was not followed, whatever program reads it (uv run, alias, $(...))
-            seen = {f.line for f in findings if f.file == ctx.file}
             for n, raw in enumerate(text.splitlines(), 1):
-                if n not in seen and not raw.lstrip().startswith('#') and GAM_LIST.search(raw):
+                m = None if raw.lstrip().startswith('#') else GAM_LIST.search(raw)
+                if not m:
+                    continue
+                # read only when a finding on this line names the list's own verb, not any other command there
+                verb = re.findall(r'["\']([^"\']*)["\']', raw[m.start():])[1:2]
+                if not any(f.file == ctx.file and f.line == n and f.command.split()[:1] == ['gam'] and
+                           f.command.split()[1:2] == verb for f in findings):
                     findings.append(Finding(ctx.file, n, UNKNOWN, 'runs gam from code the checker could not follow',
                                             short([raw.strip()]), note='check what reads this line on its own'))
         if not any(f.command.startswith('gam') for f in findings) and ctx.depth == 0:
@@ -1770,7 +1775,8 @@ class Checker:
         if docs and own and k < len(seg) and ('$(' in seg[k] or seg[k].startswith('`')):
             return 'the program reading this heredoc is chosen at runtime'
         if docs and own and (k >= len(seg) or seg[k].startswith('-')) and \
-                any(p and p[-1] == '$' and all(re.fullmatch(r'[A-Za-z_]\w*=.*', t) for t in p[:-1]) for p in prev):
+                any(p and p[-1] == '$' and next((t for t in p[:-1] if not re.fullmatch(r'[A-Za-z_]\w*=.*', t)), 'sudo').lower()
+                    in PREFIX_WORDS for p in prev):
             return 'the program reading this heredoc is chosen at runtime'
         if not docs or not own or k >= len(seg) or not is_py(seg[k]):
             return None
