@@ -1909,6 +1909,7 @@ class TestEmailBackupRestore(OffboardTestCase):
 
     def test_backup_email_only_fails_when_db_has_no_messages_table(self):
         def other_table(path):
+            path.touch()
             with offb._gyb_db(path) as db:
                 db.execute("CREATE TABLE unrelated(x)")
 
@@ -1918,6 +1919,7 @@ class TestEmailBackupRestore(OffboardTestCase):
 
     def test_backup_email_only_empty_valid_db_succeeds(self):
         def empty_messages(path):
+            path.touch()
             with offb._gyb_db(path) as db:
                 db.execute("CREATE TABLE messages(message_num INTEGER PRIMARY KEY, "
                            "message_filename TEXT, message_internaldate TIMESTAMP)")
