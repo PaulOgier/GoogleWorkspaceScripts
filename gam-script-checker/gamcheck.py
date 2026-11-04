@@ -316,8 +316,9 @@ GAM_LOOKUP = re.compile(r'(?i)\b(?:which|command\s+-v|type\s+-p|Get-Command|wher
 # gam as the first item of a quoted argument list: ["gam", "delete", ...], system('gam', 'delete'), execFileSync(`gam`, [...]),
 # an escaped \"gam\", inside another string, Ruby %w[gam ...]; anything but a plain literal list fails closed below
 GAM_LIST = re.compile(r'["\'`](?:\S*[/\\])?gam(?:\.exe|\.py)?\\?["\'`]\s*,|%[wW][\[({]\s*(?:\S*/)?gam\s')
-# a whole literal list: matching quotes, nothing after it but the end of the call or a keyword argument
-GAM_LIST_LITERAL = re.compile(r'((?:(["\'])[^"\']*\2\s*,\s*\[?\s*)*(["\'])[^"\']*\3)\s*[\])]\s*(?=\)|;|$|,\s*\w+\s*=(?![=>~]))')
+# a whole literal list: matching quotes, nothing after it but the end of the call or a keyword argument that does
+# not change what runs (executable=, preexec_fn= and shell= do, so they fail closed)
+GAM_LIST_LITERAL = re.compile(r'((?:(["\'])[^"\']*\2\s*,\s*\[?\s*)*(["\'])[^"\']*\3)\s*[\])]\s*(?=\)|;|$|,\s*(?:check|capture_output|text|cwd|env|timeout|stdin|stdout|stderr|encoding|errors|input|universal_newlines)\s*=(?![=>~]))')
 GAM_INSIDE = re.compile(r'(?:^|[\s"\'(=])(?:\S*[/\\])?gam(?:\.exe|\.py)?\s+[A-Za-z]')
 CREDENTIAL_RE = re.compile(r'(?i)oauth2(?:service)?\.(?:txt|json)|client_secrets\.json')
 NETWORK_COMMANDS = {'curl', 'wget', 'invoke-webrequest', 'invoke-restmethod', 'iwr', 'irm', 'nc', 'ncat', 'scp', 'sftp',
