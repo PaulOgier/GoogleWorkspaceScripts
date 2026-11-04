@@ -1612,15 +1612,17 @@ class Checker:
             # Fails closed: a list that runs gam (a heredoc body, a -c string, perl or node code) on a line the
             # readers above gave nothing for was not followed, whatever program reads it (uv run, alias, $(...))
             for n, raw in enumerate(text.splitlines(), 1):
-                m = None if raw.lstrip().startswith('#') else GAM_LIST.search(raw)
-                if not m:
+                if raw.lstrip().startswith('#'):
                     continue
-                # read only when a finding on this line names the list's own verb, not any other command there
-                verb = re.findall(r'["\']([^"\']*)["\']', raw[m.start():])[1:2]
-                if not any(f.file == ctx.file and f.line == n and f.command.split()[:1] == ['gam'] and
-                           f.command.split()[1:2] == verb for f in findings):
-                    findings.append(Finding(ctx.file, n, UNKNOWN, 'runs gam from code the checker could not follow',
-                                            short([raw.strip()]), note='check what reads this line on its own'))
+                for m in GAM_LIST.finditer(raw):
+                    # each list is read only when a finding on this line carries every one of its words
+                    span = raw[m.start():].split(')')[0]
+                    words = set(re.findall(r'["\']([^"\']*)["\']', span))
+                    if not any(f.file == ctx.file and f.line == n and f.command.split()[:1] == ['gam'] and
+                               words <= set(f.command.split()) for f in findings):
+                        findings.append(Finding(ctx.file, n, UNKNOWN, 'runs gam from code the checker could not follow',
+                                                short([raw.strip()]), note='check what reads this line on its own'))
+                        break
         if not any(f.command.startswith('gam') for f in findings) and ctx.depth == 0:
             findings.append(Finding(ctx.file, 0, UNKNOWN, f'no gam commands found in {len(lines)} lines',
                                     note='if this script does run gam, the checker could not see how'))

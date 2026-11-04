@@ -739,6 +739,8 @@ AUDIT_2026_11 += [
     ('gam info domain\n`which python3` - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n$(which python3) <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     # a gam argument list on a line nothing else read fails closed, whatever reads it
+    ('gam info domain\ngam print users; perl -e "system(\'gam\', \'print\', \'users\'); system(\'gam\', \'delete\', \'user\', \'b@example.com\')"', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\npython3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "print", "users"]); subprocess.run(["gam", "info", "domain"])\nEOF', 'shell', g.READ, 'exact'),
     ('gam info domain\ngam print users; perl -e "system(\'gam\', \'delete\', \'user\', \'b@example.com\')"', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\nsudo $(which python3) - <<\'EOF\'\nimport subprocess\ng = "gam"\nsubprocess.run([g, "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n( python3 - ) <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
