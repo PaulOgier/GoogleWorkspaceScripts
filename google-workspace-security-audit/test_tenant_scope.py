@@ -3722,6 +3722,18 @@ class TestSharedDriveScanAsMember(CtxTestCase):
         finally:
             ts.run_gam = original
 
+    def test_archived_member_is_not_tried(self):
+        """AUD-38: an archived organizer cannot list the drive."""
+        self.write_csv("users", "primaryEmail,suspended,archived\n"
+                       "org@example.com,False,True\n"
+                       "writer@example.com,False,False")
+        self.ctx._rows_cache.clear()
+        out = "id,name,permission.type\nF1,a.doc,anyone\n"
+        status, _, _ = self.run_with(self.two_step(out))
+        self.assertEqual("ok", status)
+        self.assertNotIn("org@example.com", [c[1] for c in self.calls])
+        self.assertEqual("writer@example.com", self.calls[0][1])
+
     def test_organizer_first_no_grant(self):
         out = "id,name,permission.type\nF1,a.doc,anyone\n"
         status, rows, note = self.run_with(self.two_step(out))

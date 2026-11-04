@@ -1780,8 +1780,8 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
     if not ctx.admin:
         return "skipped", 0, "--admin required for Shared Drive scans"
     admin_lower = ctx.admin.lower()
-    active = {col(u, "primaryEmail").lower() for u in ctx.rows("users")
-              if col(u, "suspended").lower() != "true"}
+    # Archived accounts cannot sign in either, so they cannot list a drive.
+    active = {col(u, "primaryEmail").lower() for u in _live_users(ctx)}
     rank = {"organizer": 0, "fileorganizer": 1, "writer": 2,
             "commenter": 3, "reader": 4}
     members: Dict[str, List[Tuple[int, str]]] = {}
