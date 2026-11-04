@@ -2388,6 +2388,14 @@ CHANGE_APPLICATION_SETTING,,,a@example.com,2026-10-01T09:00:00Z""")
 AUTHORIZE_API_CLIENT_ACCESS,2042,https://www.googleapis.com/auth/calendar,a@example.com,2026-10-01T09:00:00Z""")
         self.assertEqual("INFO", ts.check_dwd_grants(self.ctx)[0].severity)
 
+    def test_space_joined_scopes_are_split(self):
+        """AUD-24: GAM joins multiValue parameters with spaces."""
+        self.write_csv("report_admin", """name,API_CLIENT_NAME,API_SCOPES,actor.email,id.time
+AUTHORIZE_API_CLIENT_ACCESS,1031,https://mail.google.com/ https://www.googleapis.com/auth/drive,a@example.com,2026-10-01T09:00:00Z""")
+        found = ts.check_dwd_grants(self.ctx)
+        self.assertEqual("MEDIUM", found[0].severity)
+        self.assertIn("full Gmail access", found[0].evidence[0]["Broad access"])
+
     def test_no_grants_is_clean(self):
         self.write_csv("report_admin", """name,API_CLIENT_NAME,API_SCOPES
 CHANGE_APPLICATION_SETTING,,""")

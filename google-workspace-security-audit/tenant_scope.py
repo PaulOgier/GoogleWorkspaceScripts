@@ -5610,8 +5610,9 @@ def check_dwd_grants(ctx: RunContext) -> List[Finding]:
     for row in ctx.rows("report_admin"):
         if col(row, "name") != "AUTHORIZE_API_CLIENT_ACCESS":
             continue
-        scopes = [x.strip() for x in col(row, "API_SCOPES").split(",")
-                  if x.strip()]
+        # GAM joins a multiValue report parameter with spaces; commas are
+        # the single-string form. Split on both.
+        scopes = [x for x in re.split(r"[\s,]+", col(row, "API_SCOPES")) if x]
         broad = sorted({RISKY_SCOPES[x] for x in scopes if x in RISKY_SCOPES})
         rows.append({"Client ID": col(row, "API_CLIENT_NAME"),
                      "Granted by": col(row, "actor.email"),
