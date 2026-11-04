@@ -528,6 +528,8 @@ def test_invariants(checker):
     assert not text(f'{u} forward off')[2], 'turning forwarding off is not a security change'
     assert '7.48.21' in text(f'{u} purge events primary eventid abc')[1], 'old-GAM purge warning missing'
     assert '7.48.21' not in text(f'{u} purge events primary eventid abc doit')[1]
+    assert '7.48.21' in text(f'{u} purge events primary eventid abc $DOIT')[1], 'runtime doit keeps the old-GAM warning'
+    assert level(f'{u} purge events primary eventid abc $DOIT') == D, 'runtime doit is never a dry run'
 
     unguarded = 'gam delete user bob@example.com\n'
     for script, expect in ((unguarded, 1), ('gam info domain\n' + unguarded, None),
