@@ -679,6 +679,23 @@ class TestRestoreOnly(MainFlowCase):
         self.assertTrue(any("restore" in c and "--local-folder" in c for c in self.gyb_calls))
         self.assertFalse(any("backup" in c for c in self.gyb_calls))
 
+    def test_reuse_email_backup_refuses_a_backup_short_against_its_db(self):
+        """OFF-06: the reuse path only checked msg-db.sqlite existed."""
+        gam = ScriptedGam()
+        backup = self.tmp / "old_backup"
+        backup.mkdir()
+        db = sqlite3.connect(backup / "msg-db.sqlite")
+        db.execute("CREATE TABLE messages (message_filename TEXT, message_internaldate TEXT)")
+        db.execute("INSERT INTO messages VALUES ('a.eml', '0'), ('b.eml', '0')")
+        db.commit(); db.close()
+        (backup / "a.eml").write_text("x", encoding="utf-8")
+        code = self.run_main(gam, "--doit", "--force", "--user", LEAVER,
+                             "--reuse-email-backup", str(backup), "--email-to", SUCCESSOR)
+        self.assertFalse(any("restore" in c for c in self.gyb_calls), self.gyb_calls)
+        self.assertTrue(any("missing 1 message" in e for e in offb.summary_errors),
+                        offb.summary_errors)
+        self.assertEqual(code, 1)
+
     def test_reuse_email_backup_probes_gyb_on_the_destination_not_the_leaver(self):
         """OFF-02: restore-only writes into the destination; the suspended
         leaver's mailbox is never read, so it must not be probed."""

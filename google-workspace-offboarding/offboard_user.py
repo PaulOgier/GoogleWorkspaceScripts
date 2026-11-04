@@ -3660,6 +3660,15 @@ def migrate_email(source: str, destination: str, dry_run: bool, strip_labels: bo
             summary_error(f"Email restore skipped: invalid reuse-backup path {backup_path}")
             return
         print_info(f"Reusing existing backup (skipping download): {backup_path}")
+        # The same reconciliation the download path runs: a DB listing more
+        # messages than are on disk (beyond quarantine) restores short (OFF-06).
+        if not dry_run:
+            errors_before = len(summary_errors)
+            verify_backup_complete(backup_path)
+            if len(summary_errors) > errors_before:
+                print_error("Backup failed verification; restore skipped. "
+                            "Re-run the backup, or restore from a complete copy.")
+                return
     else:
         backup_path = _select_email_backup_path(source, force=force)
         if not dry_run:
