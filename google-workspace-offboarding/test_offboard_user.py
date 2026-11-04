@@ -1066,6 +1066,14 @@ class TestDelegates(OffboardTestCase):
         self.assertEqual(fake.matching("user", U, "delete"), [])
         self.assertIn("No inbound delegates to remove", self.actions())
 
+    def test_failed_query_is_not_reported_as_ok(self):
+        """OFF-15: printed a green "No delegates found or unable to query"."""
+        succeeded = []
+        with mock.patch.object(offb, "print_success", succeeded.append):
+            self._cleanup((False, "API error"))
+        self.assertFalse(any("delegates" in m.lower() for m in succeeded), succeeded)
+        self.assertNotIn("No inbound delegates to remove", self.actions())
+
     def test_failed_delete_is_counted_honestly(self):
         self._cleanup((True, fixture("show_delegates_one")), delete=(False, "err"))
         self.assertIn("Removed 0/1 inbound delegate(s)", self.actions())
@@ -2078,6 +2086,14 @@ class TestForwarding(OffboardTestCase):
         """Was A2_1."""
         status = (f"User: {U}, Show 2 Forwarding Addresses\n"
                   f"  Forwarding Address: {self.OTHER}, Verification Status: accepted\n"
+                  f"  Forwarding Address: {D}, Verification Status: pending\n")
+        fake = self._forward((True, status))
+        self.assertFalse(self._activated(fake))
+
+    def test_an_accepted_address_containing_the_target_does_not_verify_it(self):
+        """OFF-16: a substring match let accepted i<target> verify <target>."""
+        status = (f"User: {U}, Show 2 Forwarding Addresses\n"
+                  f"  Forwarding Address: i{D}, Verification Status: accepted\n"
                   f"  Forwarding Address: {D}, Verification Status: pending\n")
         fake = self._forward((True, status))
         self.assertFalse(self._activated(fake))

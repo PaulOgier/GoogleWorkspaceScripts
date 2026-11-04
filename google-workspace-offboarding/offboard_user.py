@@ -2719,8 +2719,13 @@ def cleanup_delegates(email: str, dry_run: bool):
         else:
             print_success("No inbound delegates found.")
             summary_action("No inbound delegates to remove")
+    elif success:
+        print_success("No inbound delegates found.")
+        summary_action("No inbound delegates to remove")
     else:
-        print_success("No delegates found or unable to query.")
+        # run_gam has recorded the failure; say so here too, not [OK] (OFF-15).
+        print_error(f"Could not list delegates. Check by hand: "
+                    f"gam user {email} show delegates")
 
     # Outbound warning
     print_warning(
@@ -3995,8 +4000,11 @@ def setup_forwarding(email: str, forward_to: str, dry_run: bool):
                 # A substring check across the whole output false-positives
                 # when a DIFFERENT, previously registered forwarding address
                 # is already accepted while the target is still pending.
+                # The address is compared whole: a substring let an accepted
+                # isam@x.com "verify" a pending sam@x.com (OFF-16).
                 for status_line in status_output.lower().splitlines():
-                    if forward_to.lower() in status_line and "accepted" in status_line:
+                    m = re.search(r"forwarding address:\s*([^\s,]+)\s*,", status_line)
+                    if m and m.group(1) == forward_to.lower() and "accepted" in status_line:
                         verified = True
                         break
                 if verified:
