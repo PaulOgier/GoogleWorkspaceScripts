@@ -297,6 +297,26 @@ sd2,Healthy Drive,alive@example.com""")
                          self.finding_ids(findings))
         self.assertEqual(1, findings[0].count)
 
+    def test_orphaned_when_every_manager_is_suspended(self):
+        # AUD-06: suspended organizers are still printed as organizers.
+        self.write_csv("users", f"""{USERS_HEADER}
+gone@example.com,True,False,2026-01-01T10:00:00Z,True,True,,False,False,Business
+old@example.com,False,True,2026-01-01T10:00:00Z,True,True,,False,False,Business
+alive@example.com,False,False,2026-10-01T10:00:00Z,True,True,,False,False,Business""")
+        self.write_csv("shareddriveorganizers", """id,name,organizers
+sd1,Leaver Drive,gone@example.com old@example.com
+sd2,Healthy Drive,alive@example.com
+sd3,Group Drive,""")
+        self.write_csv("shareddriveacls", """id,name,permission.id,permission.type,permission.emailAddress,permission.role,permission.deleted
+sd1,Leaver Drive,p1,user,gone@example.com,organizer,False
+sd1,Leaver Drive,p2,user,old@example.com,organizer,False
+sd1,Leaver Drive,p3,user,alive@example.com,writer,False
+sd2,Healthy Drive,p4,user,alive@example.com,organizer,False
+sd3,Group Drive,p5,group,admins@example.com,organizer,False""")
+        findings = ts.check_orphaned_shared_drives(self.ctx)
+        self.assertEqual(["orphaned-shared-drives"], self.finding_ids(findings))
+        self.assertEqual(["sd1"], [r["Drive ID"] for r in findings[0].evidence])
+
     def test_shared_drive_external_member(self):
         self.write_csv("shareddriveacls", """id,name,permission.id,permission.type,permission.emailAddress,permission.role,permission.deleted
 sd1,Client Drive,p1,user,partner@other.example.net,writer,False

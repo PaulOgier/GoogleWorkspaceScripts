@@ -2619,15 +2619,46 @@ def check_external_forwarding(ctx: RunContext) -> List[Finding]:
 
 
 def check_orphaned_shared_drives(ctx: RunContext) -> List[Finding]:
-    if not _module_usable(ctx, "shareddriveorganizers"):
-        return []
-    hits = []
-    for row in ctx.rows("shareddriveorganizers"):
-        if not col(row, "organizers"):
-            hits.append({"Shared Drive": col(row, "name"),
-                         "Drive ID": col(row, "id")})
+    """Drives nobody can manage. GAM's shareddriveorganizers lists only user
+    organizers and still lists suspended ones, so the drive ACLs decide: a
+    group organizer or an organizer who is not suspended or archived counts
+    as a manager; the empty organizers column is kept for drives the ACLs
+    do not cover."""
+    hits: Dict[str, Dict[str, str]] = {}
+    if _module_usable(ctx, "shareddriveorganizers"):
+        for row in ctx.rows("shareddriveorganizers"):
+            if not col(row, "organizers"):
+                hits[col(row, "id")] = {"Shared Drive": col(row, "name"),
+                                        "Drive ID": col(row, "id"),
+                                        "Managers": "none"}
+    if _module_usable(ctx, "shareddriveacls") and _module_usable(ctx, "users"):
+        gone = {col(u, "primaryEmail").lower() for u in ctx.rows("users")
+                if truthy(col(u, "suspended")) or truthy(col(u, "archived"))}
+        names: Dict[str, str] = {}
+        managed: Set[str] = set()
+        left: Dict[str, List[str]] = {}
+        for row in ctx.rows("shareddriveacls"):
+            if truthy(col(row, "permission.deleted")) or col(
+                    row, "permission.role", "role").lower() != "organizer":
+                continue
+            did = col(row, "id")
+            names[did] = col(row, "name")
+            email = col(row, "permission.emailAddress", "emailAddress").lower()
+            if col(row, "permission.type", "type").lower() == "user" \
+                    and email in gone:
+                left.setdefault(did, []).append(email)
+            else:
+                managed.add(did)
+        for did in managed:
+            hits.pop(did, None)
+        for did, emails in left.items():
+            if did not in managed:
+                hits[did] = {"Shared Drive": names[did], "Drive ID": did,
+                             "Managers": "suspended or archived: "
+                             + ", ".join(sorted(emails))}
     if not hits:
         return []
+    hits = sorted(hits.values(), key=lambda r: r["Shared Drive"].lower())
     return [Finding(
         "orphaned-shared-drives", "CRITICAL",
         "Shared Drives with no manager",
@@ -2637,7 +2668,8 @@ def check_orphaned_shared_drives(ctx: RunContext) -> List[Finding]:
         "by the people using it.",
         "Have an admin appoint a new manager on each drive (Admin console > "
         "Apps > Google Workspace > Drive and Docs > Manage shared drives).",
-        hits, "shareddriveorganizers.csv")]
+        hits, "shareddriveacls.csv and shareddriveorganizers.csv",
+        id_field="Drive ID")]
 
 
 def check_shared_drive_external(ctx: RunContext) -> List[Finding]:

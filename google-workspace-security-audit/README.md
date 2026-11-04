@@ -98,7 +98,9 @@ the full module registry with keys and tiers.
 
 ### Shared Drives
 
-- Shared Drives with **no manager** (orphaned Shared Drives) [Critical]
+- Shared Drives with **no manager** (orphaned Shared Drives) [Critical],
+  including drives whose every manager is suspended or archived; a drive
+  managed through a group is not flagged
 - Shared Drives open to external sharing, or holding external members [High]
 - New Shared Drives defaulting to external sharing [Medium]
 - Shared Drive creation and manager overrides left open, and per-drive copy
