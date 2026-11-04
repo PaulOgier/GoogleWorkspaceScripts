@@ -61,6 +61,16 @@ def tearDownModule():
     ts._popen_isolated = _popen_original
 
 
+def _not_member(fake):
+    """Answer the pre-grant membership check as GAM does for a drive the
+    admin is not on (Does not exist, non-zero exit); the rest goes to fake."""
+    def wrapped(args, **kw):
+        if "info" in args and "drivefileacl" in args:
+            return 56, "", "Permission ID: admin@example.com, Does not exist\n"
+        return fake(args, **kw)
+    return wrapped
+
+
 class CtxTestCase(unittest.TestCase):
     """Base: a temp run dir with helpers to drop fixture CSVs in."""
 
@@ -1772,6 +1782,11 @@ class TestPreflightParsing(unittest.TestCase):
                f"    Hint: {gm} FAILED to open\n")
         self.assertEqual(([cal], [gm]), ts.parse_serviceaccount_check(out))
 
+    def test_parse_serviceaccount_comma_without_space(self):
+        url = "https://www.googleapis.com/auth/drive"
+        self.assertEqual(([url], []),
+                         ts.parse_serviceaccount_check(f"{url},PASS\n"))
+
     def test_header_only_detection(self):
         self.assertTrue(ts.is_header_only("Owner,id,name\n"))
         self.assertTrue(ts.is_header_only(""))
@@ -2592,6 +2607,28 @@ class TestMonthlyService(CtxTestCase):
                  "scopes": ["https://www.googleapis.com/auth/gmail.settings.basic"]}]
         self.assertTrue(ts.preflight(self.ctx, mods))
         self.assertEqual([["version"], ["info", "domain"]], calls)
+
+    def test_declined_tenant_leaves_no_seat_data(self):
+        self.stub_gam_for("C_A")
+        self.ctx.args.yes = False
+        import builtins
+        original = builtins.input
+        builtins.input = lambda prompt="": "n"
+        try:
+            self.assertFalse(ts.preflight(self.ctx, []))
+        finally:
+            builtins.input = original
+        self.assertFalse((self.run_dir / "domaininfo.txt").exists())
+
+    def test_render_only_accepts_an_unknown_saved_customer(self):
+        self.ctx.manifest["meta"]["customer_id"] = "?"
+        self.ctx.save()
+        self.patch("setup_logging", lambda run_dir: None)
+        self.patch("finish", lambda ctx: (0, None))
+        self.patch("open_report", lambda report, args: None)
+        args = make_args(render_only=True, run_dir=self.run_dir)
+        self.assertEqual(0, ts.run_tenant(args, {
+            "key": "a", "name": "A", "customer_id": "C_A", "break_glass": []}))
 
     def test_resume_against_the_same_customer_passes(self):
         self.ctx.manifest["meta"]["customer_id"] = "C_OLD"
@@ -3630,7 +3667,8 @@ class TestTempGrantFailure(CtxTestCase):
         reason = ("Add Failed: Cannot set the requested role for that user "
                   "as they lack the necessary license.")
         original = ts.run_gam
-        ts.run_gam = lambda args, **kw: (50, "", "User: a, " + reason + "\n")
+        ts.run_gam = _not_member(
+            lambda args, **kw: (50, "", "User: a, " + reason + "\n"))
         try:
             status, rows, note = ts.collect_sd_external(
                 self.ctx, ts.MODULE_BY_KEY["shareddrive_external"])
@@ -3668,7 +3706,7 @@ class TestTempGrantCleanupInterrupted(CtxTestCase):
             if "add" in args:
                 return 0, "", ""
             return 0, "id,name,mimeType,hasAugmentedPermissions\n", ""
-        ts.run_gam = fake
+        ts.run_gam = _not_member(fake)
         return ts.collect_sd_external(
             self.ctx, ts.MODULE_BY_KEY["shareddrive_external"])
 
@@ -3698,6 +3736,69 @@ class TestTempGrantCleanupInterrupted(CtxTestCase):
         touched = [c[4] for c in calls if "add" in c or "delete" in c]
         self.assertEqual(["D2", "D2"], touched)   # D1 scanned as a member
         self.assertEqual([], self.on_disk())
+
+    def run_recording(self, info):
+        calls = []
+
+        def fake(args, **kw):
+            calls.append(args)
+            if "info" in args and "drivefileacl" in args:
+                return info(args)
+            if "add" in args or "delete" in args:
+                return 0, "", ""
+            return 0, "id,name,mimeType,hasAugmentedPermissions\n", ""
+        ts.run_gam = fake
+        result = ts.collect_sd_external(
+            self.ctx, ts.MODULE_BY_KEY["shareddrive_external"])
+        return calls, result
+
+    def test_leftover_grant_is_removed_on_resume_not_read_as_membership(self):
+        """Review of AUD-41: our own unremoved grant must be re-removed."""
+        self.ctx.manifest["meta"]["temp_grant_cleanup_failed"] = [
+            {"drive": "Finance", "id": "D1", "admin": "admin@example.com"}]
+        self.ctx.save()
+        organizer = json.dumps({"id": "D1", "permission": {
+            "role": "organizer"}}) + "\n"
+        calls, _ = self.run_recording(
+            lambda args: (0, organizer, "") if args[4] == "D1" else
+            (56, "", "Permission ID: x, Does not exist\n"))
+        self.assertIn("D1", [c[4] for c in calls if "delete" in c])
+        self.assertNotIn("D1", [c[4] for c in calls if "info" in c])
+        self.assertEqual([], self.on_disk())
+
+    def test_failed_membership_check_never_grants(self):
+        """Review of AUD-41: a quota error is not "not a member"."""
+        calls, (status, _, note) = self.run_recording(
+            lambda args: (1, "", "ERROR: 429: Quota exceeded\n"))
+        self.assertFalse(any("add" in c or "delete" in c for c in calls))
+        self.assertIn("membership check failed", note)
+
+    def test_save_failure_does_not_stop_the_removal(self):
+        """Review of AUD-05: a full disk at the save must not skip the
+        removal of a live grant."""
+        original_save = ts.RunContext.save
+
+        def failing_save(ctx):
+            raise OSError(28, "No space left on device")
+        calls = []
+
+        def fake(args, **kw):
+            calls.append(args)
+            if "info" in args:
+                return 56, "", "Does not exist\n"
+            if "add" in args:
+                ts.RunContext.save = failing_save
+                return 0, "", ""
+            return 0, "id,name,mimeType,hasAugmentedPermissions\n", ""
+        ts.run_gam = fake
+        try:
+            ts.collect_sd_external(self.ctx,
+                                   ts.MODULE_BY_KEY["shareddrive_external"])
+        except OSError:
+            pass
+        finally:
+            ts.RunContext.save = original_save
+        self.assertIn("D1", [c[4] for c in calls if "delete" in c])
 
     def test_failed_removal_then_ctrl_c(self):
         def delete():
@@ -3777,6 +3878,17 @@ class TestSharedDriveScanAsMember(CtxTestCase):
                 return 0, self.LISTING, ""
             return 0, "id,name,permission.type\nF1,a.doc,anyone\n", (
                 "File: F2, Does not exist\n")
+        status, rows, _ = self.run_with(fake)
+        self.assertEqual(("ok", 1), (status, rows))
+        self.assertEqual({"org@example.com"}, {c[1] for c in self.calls})
+
+    def test_file_entity_line_naming_the_member_is_not_no_drive(self):
+        """Review of AUD-39: the member's name on a per-file line."""
+        def fake(args):
+            if "id,name,mimeType,hasaugmentedpermissions" in args:
+                return 0, self.LISTING, ""
+            return 0, "id,name,permission.type\nF1,a.doc,anyone\n", (
+                "User: org@example.com, Drive File/Folder: F2, Does not exist\n")
         status, rows, _ = self.run_with(fake)
         self.assertEqual(("ok", 1), (status, rows))
         self.assertEqual({"org@example.com"}, {c[1] for c in self.calls})
@@ -3919,7 +4031,7 @@ class TestTempGrantCleanup(CtxTestCase):
                 return remove_rc, "", "Delete Failed: boom\n" if remove_rc else ""
             return 0, "id,name,hasAugmentedPermissions\nF2,b.doc,False\n", ""
         original = ts.run_gam
-        ts.run_gam = fake
+        ts.run_gam = _not_member(fake)
         try:
             status, rows, note = ts.collect_sd_external(
                 self.ctx, ts.MODULE_BY_KEY["shareddrive_external"])

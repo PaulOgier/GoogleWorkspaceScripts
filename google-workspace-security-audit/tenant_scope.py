@@ -145,7 +145,7 @@ Changelog
                         defaults corrected, BEC filter rules sharpened, the
                         printed PDF keeps its header and severity labels.
                         The temporary organizer grant is skipped for an
-                        admin who is already a member. 355 tests.
+                        admin who is already a member. 362 tests.
   2026-10-21 - v1.7.2 - A --run-dir holding another customer's run is refused
                         at preflight instead of being resumed under this
                         tenant. A Shared Drive scan that left drives unscanned
@@ -1182,19 +1182,15 @@ def parse_serviceaccount_check(output: str) -> Tuple[List[str], List[str]]:
     """
     passed, failed = [], []
     for line in output.splitlines():
-        match = re.search(r"(https://\S+)", line)
-        if not match:
-            continue
-        url = match.group(1).rstrip(",")
-        # Anchor on the PASS / FAIL cell right after the URL, not any word
-        # starting with FAIL: a "... FAILED to open" hint line would
-        # otherwise skip a module. GAM 7.50.00 prints the cell after padding
-        # spaces (printPassFail: f'{scope:73} {result}'); the comma form is
-        # kept for older output.
-        if re.search(r"^\s*https://\S+?,?\s+FAIL\b", line):
-            failed.append(url)
-        elif re.search(r"^\s*https://\S+?,?\s+PASS\b", line):
-            passed.append(url)
+        # The PASS / FAIL cell right after the URL, not any word starting
+        # with FAIL: a "... FAILED to open" hint line would otherwise skip a
+        # module. GAM 7.50.00 pads the URL with spaces (printPassFail:
+        # f'{scope:73} {result}'); a comma form is read too.
+        match = re.search(r"^\s*(https://\S+?)(?:,\s*|\s+)(PASS|FAIL)\b",
+                          line)
+        if match:
+            (failed if match.group(2) == "FAIL" else passed).append(
+                match.group(1))
     return passed, failed
 
 
@@ -1323,9 +1319,6 @@ def preflight(ctx: RunContext, modules: List[Dict]) -> bool:
                 print_error(f"Wrong tenant: GAM answered for {customer} "
                             f"({domain}), tenants.json expects {expected}.")
                 return False
-            # The raw output also carries per-SKU seat counts; keep it for
-            # the licence-waste check (a second call would be pure waste).
-            (ctx.run_dir / "domaininfo.txt").write_text(out, encoding="utf-8")
             ctx.manifest["meta"]["primary_domain"] = domain
             ctx.manifest["meta"]["customer_id"] = customer
             table.append(("Tenant", f"{domain} (customer {customer})",
@@ -1347,6 +1340,9 @@ def preflight(ctx: RunContext, modules: List[Dict]) -> bool:
                 if answer not in ("y", "yes"):
                     print_error("Tenant not confirmed; nothing was collected.")
                     return False
+            # Only once confirmed: the raw output carries per-SKU seat counts
+            # for the licence-waste check (a second call would be pure waste).
+            (ctx.run_dir / "domaininfo.txt").write_text(out, encoding="utf-8")
 
     # Gate 4 (degrade): authorisation for the DWD modules actually selected.
     if ok and getattr(args, "dry_run", False):
@@ -1848,27 +1844,30 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
         # Only a line naming this member counts: "Does not exist" for a file
         # deleted mid-scan is not the member lacking a Drive.
         member = args[1].lower() if len(args) > 1 else ""
-        skipped = any(m.group(1).lower() == member
-                      for m in map(_NO_SERVICE_RE.search, err.splitlines())
-                      if m)
+        skipped = any(m.group(1).lower() == member and "File" not in ln
+                      for ln in err.splitlines()
+                      for m in [_NO_SERVICE_RE.search(ln)] if m)
         if not skipped and (rc == 0 or (rc == 60 and is_header_only(out))):
             return True, out, ""
         return False, "", (err.strip().splitlines()[-1] if err.strip()
                            else f"exit {rc}")
 
-    def admin_is_member(drive_id: str) -> bool:
+    def admin_is_member(drive_id: str) -> Optional[bool]:
         """Live check that the admin already holds a permission on the drive.
 
         GAM 7.50.00 `info drivefileacl ... formatjson` prints one JSON line
         carrying "permission", or a "Does not exist" warning and a non-zero
-        exit; anything else is read as not a member (the grant path)."""
+        exit. True or False only on those; None (do not grant) on anything
+        else, since a grant over a real membership deletes it on removal."""
         rc, out, err = run_gam(
             ["user", ctx.admin, "info", "drivefileacl", drive_id, ctx.admin,
              "adminaccess", "formatjson"],
             timeout=120, dry_run=ctx.args.dry_run)
         ctx.stderr_log(mod["key"], err)
-        if ctx.args.dry_run or rc != 0:
+        if ctx.args.dry_run:
             return False
+        if rc != 0:
+            return False if "Does not exist" in err else None
         for line in out.splitlines():
             try:
                 row = json.loads(line)
@@ -1878,7 +1877,7 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
                                                     dict) \
                     and row["permission"].get("role"):
                 return True
-        return False
+        return None
 
     def scan(drive_id: str, drive_name: str, as_user: str) -> Tuple[bool, str]:
         """List one drive as one user; rows are kept only on success.
@@ -1963,7 +1962,17 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
         if not ctx.args.grant_temp_access:
             unscanned.append(f"{drive_name} ({drive_id})")
             continue
-        if admin_is_member(drive_id):
+        # A drive whose earlier grant could not be removed holds our own
+        # permission: re-grant and remove it, never read it as membership.
+        ours = any(e.get("id") == drive_id for e in ctx.manifest["meta"].get(
+            "temp_grant_cleanup_failed", []))
+        member = None if ours else admin_is_member(drive_id)
+        if not ours and member is None:
+            unscanned.append(f"{drive_name} ({drive_id}) - could not check "
+                             "the admin's membership before granting")
+            grant_errors.append("membership check failed")
+            continue
+        if member:
             # Added since shareddriveacls.csv was collected (a resume): the
             # grant's removal would delete the admin's real membership.
             ok, _ = scan(drive_id, drive_name, ctx.admin)
@@ -1997,7 +2006,10 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
                 "temp_grant_cleanup_failed", [])
             if not ctx.args.dry_run:
                 stale.append(entry)
-                ctx.save()
+                try:
+                    ctx.save()
+                except OSError:
+                    pass        # the removal below must still run
             rc, out, err = run_gam(
                 ["user", ctx.admin, "delete", "drivefileacl", drive_id,
                  ctx.admin, "adminaccess"],
@@ -2006,7 +2018,10 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
             attempted.add(drive_id)
             if not ctx.args.dry_run and rc == 0:
                 stale[:] = [e for e in stale if e["id"] != drive_id]
-                ctx.save()
+                try:
+                    ctx.save()
+                except OSError:
+                    pass
             if not ctx.args.dry_run and rc != 0:
                 cleanup_failed.append(entry)
                 print_error(
@@ -7246,7 +7261,7 @@ def run_tenant(args, tenant: Optional[Dict]) -> int:
 
     ctx = RunContext(run_dir, args)
     saved = ctx.manifest["meta"].get("customer_id")
-    if (args.render_only and tenant and saved
+    if (args.render_only and tenant and saved and saved != "?"
             and saved != tenant["customer_id"]):
         # Preflight's customer check never runs on a re-render; without this
         # the report would put this tenant's name and break-glass list over
