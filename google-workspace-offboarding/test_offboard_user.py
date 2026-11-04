@@ -2302,6 +2302,20 @@ class TestArgParsing(OffboardTestCase):
             self._parse(*argv)
         self.assertEqual(cm.exception.code, 2, " ".join(argv))
 
+    def test_flags_that_would_be_ignored_are_usage_errors(self):
+        """OFF-23: each of these was accepted and did nothing."""
+        reuse = ("--reuse-email-backup", "/b", "--email-to", D)
+        for extra in (("--no-suspend",), ("--no-drive",), ("--drive-to", D),
+                      ("--allow-orphaned-shared-drives",)):
+            self._usage_error("--user", U, *reuse, *extra)
+        self._usage_error("--user", U, "--doit", "--force", "--scorched-earth",
+                          "--forward-alias-to", D)
+        self._usage_error("--user", U, "--no-transfer", "--all-transfer-to", D)
+        self._usage_error("--user", U, "--no-transfer", "--drive-to", D)
+        self._usage_error("--user", U, "--allow-orphaned-shared-drives")
+        # Still accepted: --forward-alias-to is end-of-run guidance under --no-transfer.
+        self._parse("--user", U, "--no-transfer", "--forward-alias-to", D)
+
     def test_restore_batch_size_one_is_a_usage_error(self):
         # GYB's single-message path never commits the resume DB mid-run.
         self._usage_error("--restore-batch-size", "1")

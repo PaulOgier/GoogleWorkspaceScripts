@@ -225,7 +225,7 @@ interactive prompt (only without `--force`).
 | `--backup-drive` | Download the user's Drive locally with rclone before any transfer. |
 | `--backup-email` | Download the mailbox locally with GYB without restoring it anywhere. If a mailbox migration also runs, the migration's retained backup serves as the archive and nothing is downloaded twice. |
 | `--backup-dir <path>` | Root for all backups (snapshots, mailbox, Drive). Default `./offboarding_backups`. Point it outside any synced folder. |
-| `--reuse-email-backup <path>` | Restore from an existing GYB backup folder and skip the download. For resuming a restore that died partway. |
+| `--reuse-email-backup <path>` | Restore from an existing GYB backup folder and skip the download. For resuming a restore that died partway. Needs `--email-to` or `--all-transfer-to`; refused with any skip flag, backup flag, other destination flag, `--unsuspend` or `--allow-orphaned-shared-drives`, since restore-only runs nothing else. |
 | `--restore-batch-size <n>` | Messages per Gmail import request on restore, 2 to 100, default 50 (1 is refused: GYB would save restore progress only at the end). Drop towards 10 if Gmail rate-limits. |
 | `--strip-labels` / `--keep-labels` | On restore, discard the original Gmail labels (default under `--force`) or keep them. The migrated label is added either way. |
 
@@ -233,7 +233,7 @@ interactive prompt (only without `--force`).
 
 | Flag | What it does |
 |---|---|
-| `--no-transfer` | Skip all transfers, forwarding, aliases, calendar, delegates and auto-reply. Only containment, devices, groups, licences, backups and suspension run. |
+| `--no-transfer` | Skip all transfers, forwarding, aliases, calendar, delegates and auto-reply. Only containment, devices, groups, licences, backups and suspension run. Refused with a destination flag (`--forward-alias-to` is still accepted). |
 | `--no-snapshot` | Skip the pre-flight snapshot. |
 | `--no-devices` | Skip device management. |
 | `--no-delegates` | Skip delegate cleanup. |
@@ -252,7 +252,7 @@ interactive prompt (only without `--force`).
 | `--unsuspend` | Temporarily unsuspend an already-suspended user for the full offboarding, then re-suspend at the end. |
 | `--allow-admin-account` | Continue even though the user still holds Super Admin or delegated admin rights. The script does not revoke those roles. |
 | `--scorched-earth` | Snapshot, kill switch, remove groups and licences, suspend, then permanently delete the user. Needs `--doit` and `--force`, refuses every backup and transfer flag, and asks you to type the address. |
-| `--allow-orphaned-shared-drives` | With `--scorched-earth`, delete the user even when they are the only organiser of a Shared Drive. |
+| `--allow-orphaned-shared-drives` | With `--scorched-earth`, delete the user even when they are the only organiser of a Shared Drive. Refused without `--scorched-earth`. |
 
 ## Command builder (no-code helper)
 

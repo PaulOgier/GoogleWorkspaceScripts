@@ -5134,10 +5134,46 @@ def parse_args():
                             ("--no-transfer", args.no_transfer),
                             ("--backup-drive", args.backup_drive),
                             ("--backup-email", args.backup_email),
-                            ("--unsuspend", args.unsuspend)):
+                            ("--unsuspend", args.unsuspend),
+                            # OFF-23: these were accepted and ignored.
+                            ("--no-suspend", args.no_suspend),
+                            ("--no-drive", args.no_drive),
+                            ("--no-alias", args.no_alias),
+                            ("--no-calendar", args.no_calendar),
+                            ("--no-forward", args.no_forward),
+                            ("--no-auto-reply", args.no_auto_reply),
+                            ("--no-delegates", args.no_delegates),
+                            ("--no-devices", args.no_devices),
+                            ("--no-snapshot", args.no_snapshot),
+                            ("--drive-to", args.drive_to),
+                            ("--alias-to", args.alias_to),
+                            ("--calendar-to", args.calendar_to),
+                            ("--forward-to", args.forward_to),
+                            ("--forward-alias-to", args.forward_alias_to),
+                            ("--allow-orphaned-shared-drives",
+                             args.allow_orphaned_shared_drives)):
             if value:
                 parser.error(f"--reuse-email-backup cannot be combined with {flag}: "
                              f"restore-only mode runs nothing but the email restore.")
+
+    # OFF-23: each of these was accepted and silently did nothing.
+    if args.allow_orphaned_shared_drives and not args.scorched_earth:
+        parser.error("--allow-orphaned-shared-drives only applies to --scorched-earth: "
+                     "no other mode deletes the account.")
+    if args.scorched_earth and args.forward_alias_to:
+        parser.error("--scorched-earth cannot be combined with --forward-alias-to: "
+                     "the scorched path prints no mail-capture steps. Run a normal "
+                     "offboarding with it first, then delete.")
+    if args.no_transfer:
+        for flag, value in (("--all-transfer-to", args.all_transfer_to),
+                            ("--drive-to", args.drive_to),
+                            ("--email-to", args.email_to),
+                            ("--alias-to", args.alias_to),
+                            ("--calendar-to", args.calendar_to),
+                            ("--forward-to", args.forward_to)):
+            if value:
+                parser.error(f"--no-transfer cannot be combined with {flag}: "
+                             f"no transfer phase runs.")
 
     if args.no_transfer:
         args.no_drive = True
