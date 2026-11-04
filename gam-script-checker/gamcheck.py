@@ -845,7 +845,8 @@ class GamParser:
                 notes.append(f'sends {chosen} to the device')
             else:
                 level, notes = DESTRUCTIVE, notes + ['device command not readable; treated as a wipe']
-        if 'todrive' in self._flags(rest, positional=False):  # query "todrive" is a search value, not the option (CHK-21)
+        if any(norm(t) == 'todrive' and (k == 0 or norm(rest[k - 1]) not in ('query', 'queries'))
+               for k, t in enumerate(rest)):  # query "todrive" is a search value, not the option (CHK-21)
             level = max(level, CHANGES)
             notes.append('uploads the output to a Google Sheet in your Drive')
         if verb in ('update', 'create', 'add') and obj == 'user':
@@ -1743,8 +1744,10 @@ class Checker:
                 not re.fullmatch(r'(?i)python[\d.]*|py', re.split(r'[\\/]', seg[k].strip('`"\''))[-1].removesuffix('.exe')):
             return None
         args = seg[k + 1:]
-        if any(not t.startswith('-') or (t != '-' and not t.startswith('--') and re.search(r'[cm]', t[1:])) for t in args):
-            return None  # a script file, -c CODE or -m MOD (also glued: -mjson.tool): not the heredoc
+        # a script file, -c CODE or -m MOD (also glued, -mjson.tool, or after no-value flags, -uc): not the heredoc;
+        # -W and -X take a value, so -Wcm is -W with the value cm and the program is still the heredoc
+        if any(not t.startswith('-') or re.fullmatch(r'-[bBdEiIOPqRsSuvx]*[cm].*', t) for t in args):
+            return None
         if any(re.fullmatch(r'0?<&?|<<<', t) for t in raw[own[-1] + 1:]):
             return 'python reads its program from a later redirect, not the heredoc'
         if any(t not in PYTHON_PLAIN_OPTIONS for t in args):

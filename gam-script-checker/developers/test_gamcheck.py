@@ -689,6 +689,8 @@ AUDIT_2026_11 += [
     ('gamx info domain\ngamx delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
     ('gam print users query "todrive"', 'shell', g.READ, 'exact'),
     ('gam print users todrive', 'shell', g.CHANGES, 'exact'),
+    ('gam print users fields todrive', 'shell', g.CHANGES, 'exact'),
+    ('gam info domain\npython3 -Wcm - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam print users query "isSuspended=False" todrive', 'shell', g.CHANGES, 'exact'),
     # CHK-16: python3 - <<'EOF' runs the heredoc as Python, so the Python reader reads it
     ('gam info domain\npython3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
