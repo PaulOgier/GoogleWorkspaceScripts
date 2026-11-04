@@ -39,7 +39,7 @@ YOU ASSUME ALL RISK ASSOCIATED WITH THE USE OF THIS SOFTWARE.
 Author:       Paul Ogier
 Created:      2026-09-13
 Updated:      2026-11-04
-Version:      0.4.7
+Version:      0.4.8
 Status:       Pre-release
 Python:       3.9+
 Dependencies: None. Stdlib only; never runs gam or the script it checks.
@@ -73,7 +73,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
-__version__ = '0.4.7'
+__version__ = '0.4.8'
 
 HERE = Path(__file__).resolve().parent
 VERBS_DIR = HERE / 'verbs'
@@ -145,17 +145,18 @@ NOTES = {
 # updateCalendarAttendees). Gmail commands given explicit ids skip the check, and so
 # does a mobile or Cloud Identity device named directly (getMobileDeviceEntity,
 # getCIDeviceEntity and getCIDeviceUserEntity return doit=True): only a query is gated.
-# purge event is NOT gated: _purgeCalendarEvents skips the gated delete, then moves
-# the matched events into a temporary calendar and deletes it, without doit
-# (dev tenant, GAM 7.48.01 and 7.48.20, 2026-10-06: a live event was destroyed;
-# reported as GAM-team/GAM#1997, re-test when it closes).
+# purge event is gated from GAM 7.48.21 (GAM-team/GAM#1997): _purgeCalendarEvents
+# stops after the gated delete without doit. Before that it moved the matched events
+# into a temporary calendar and deleted it anyway (dev tenant, 7.48.01 and 7.48.20,
+# 2026-10-06); the gate held on 7.50.00, all three VMs, 2026-11-04.
 DOIT_GATED = (
     {('user', v, o) for v in ('delete', 'modify', 'spam', 'trash', 'untrash', 'forward')
      for o in ('message', 'thread')}
     | {('user', 'archive', 'message')}
     | {('user', 'delete', 'filerevision'), ('user', 'update', 'filerevision'), ('user', 'delete', 'event'),
        ('user', 'update', 'calattendees'), ('calendar', 'deleteevent', None),
-       ('calendar', 'delete', 'event'), ('main', 'delete', 'mobile'),
+       ('calendar', 'delete', 'event'), ('user', 'purge', 'event'), ('calendar', 'purge', 'event'),
+       ('main', 'delete', 'mobile'),
        ('main', 'update', 'mobile')}
     | {('main', v, o) for v in ('delete', 'update', 'cancelwipe', 'wipe') for o in ('device', 'deviceuser')}
     | {('main', 'approve', 'deviceuser'), ('main', 'block', 'deviceuser')}
@@ -799,7 +800,6 @@ class GamParser:
             else:
                 key = None  # a settings update: preview is not accepted there
         if verb == 'purge' and obj == 'event':
-            notes.append('deletes the matched events permanently even without doit, though GAM prints "Not Deleted"')
             undo = 'none: the events skip the calendar trash'
         if obj == 'drivefile' and verb == 'delete':
             if 'purge' in words:
@@ -832,6 +832,8 @@ class GamParser:
             else:
                 level, undo, dry = READ, '', True
                 notes.append('no doit: GAM counts what matches and changes nothing')
+            if verb == 'purge' and 'doit' not in flags:
+                notes.append('GAM older than 7.48.21 deletes the matched events even without doit')
         if key in PREVIEW_ABLE and 'preview' in flags:
             level, undo, dry = READ, '', True
             notes.append('preview: GAM lists what it would do and changes nothing')

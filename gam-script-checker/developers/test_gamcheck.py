@@ -453,7 +453,7 @@ def test_invariants(checker):
     named target: a change to something written out in the command (an address, a path) names it.
     doit truth table: each doit-gated command, in its named and query forms, gets the level
     GAM7's own gate gives it (source cited per row; the named-device and purge rows were run on
-    the dev tenant, 2026-10-06).
+    the dev tenant, 2026-10-06; purge again on 7.50.00, 2026-11-04).
     polarity: switching something off never reads the same as switching it on.
     tenant guard: a change with no gam info domain check above it gets the NOTE; a guarded one does not.
     """
@@ -502,8 +502,10 @@ def test_invariants(checker):
           for o, n in (('device', 'devices/abc'), ('deviceuser', 'devices/abc/deviceUsers/def')) if o in objs],  # 31617, 31652
         *[(('main', v, o), f'gam {v} {o} query x' + (' action wipe' if v == 'update' else ''), R)
           for v, objs in DEVICE_VERBS.items() for o in objs],
-        (None, f'{u} purge events primary matchfield summary x', D),  # 42889: not gated, destroys events
-        (None, 'gam calendar c@example.com purge event query x', D),
+        (('user', 'purge', 'event'), f'{u} purge events primary matchfield summary x', R),  # 7.50.00 43096, GAM#1997
+        (('user', 'purge', 'event'), f'{u} purge events primary eventid abc doit', D),
+        (('calendar', 'purge', 'event'), 'gam calendar c@example.com purge event query x', R),
+        (('calendar', 'purge', 'event'), 'gam calendar c@example.com purge event id abc doit', D),
         (None, 'gam delete device devicesn 123', R),
     ]
     def ok(got, want):
@@ -524,6 +526,8 @@ def test_invariants(checker):
                      'gam update group s@example.com remove member bob@example.com')):
         assert text(on) != text(off), (on, text(on))
     assert not text(f'{u} forward off')[2], 'turning forwarding off is not a security change'
+    assert '7.48.21' in text(f'{u} purge events primary eventid abc')[1], 'old-GAM purge warning missing'
+    assert '7.48.21' not in text(f'{u} purge events primary eventid abc doit')[1]
 
     unguarded = 'gam delete user bob@example.com\n'
     for script, expect in ((unguarded, 1), ('gam info domain\n' + unguarded, None),
