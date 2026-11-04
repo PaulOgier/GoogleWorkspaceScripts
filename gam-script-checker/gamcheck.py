@@ -38,7 +38,7 @@ YOU ASSUME ALL RISK ASSOCIATED WITH THE USE OF THIS SOFTWARE.
 
 Author:       Paul Ogier
 Created:      2026-09-13
-Updated:      2026-11-03
+Updated:      2026-11-04
 Version:      0.4.7
 Status:       Pre-release
 Python:       3.9+

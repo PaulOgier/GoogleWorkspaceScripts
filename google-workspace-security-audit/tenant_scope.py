@@ -145,7 +145,9 @@ Changelog
                         defaults corrected, BEC filter rules sharpened, the
                         printed PDF keeps its header and severity labels.
                         The temporary organizer grant is skipped for an
-                        admin who is already a member. 362 tests.
+                        admin who is already a member; a drive member
+                        removed since the ACL list was read no longer
+                        counts as a clean scan. 370 tests.
   2026-10-21 - v1.7.2 - A --run-dir holding another customer's run is refused
                         at preflight instead of being resumed under this
                         tenant. A Shared Drive scan that left drives unscanned
