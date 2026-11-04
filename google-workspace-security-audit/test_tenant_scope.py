@@ -711,6 +711,19 @@ rogue@example.com,NOT_YET_SENT,2026-08-01T00:00:00Z""")
         ids = self.finding_ids(ts.check_unmanaged_accounts(self.ctx))
         self.assertEqual(["unmanaged-accounts"], ids)
 
+    def test_accepted_invitation_is_not_an_unmanaged_account(self):
+        """AUD-19: ACCEPTED is already converted; DECLINED is still live."""
+        self.write_csv("userinvitations", """email,state,updateTime
+done@example.com,ACCEPTED,2026-08-01T00:00:00Z
+no@example.com,DECLINED,2026-08-01T00:00:00Z""")
+        found = ts.check_unmanaged_accounts(self.ctx)
+        self.assertEqual(["no@example.com"],
+                         [r["Email"] for r in found[0].evidence])
+        self.write_csv("userinvitations", """email,state,updateTime
+done@example.com,ACCEPTED,2026-08-01T00:00:00Z""")
+        self.ctx._rows_cache.clear()
+        self.assertEqual([], ts.check_unmanaged_accounts(self.ctx))
+
 
 class TestDelegationChecks(CtxTestCase):
     def test_admin_mailbox_delegate_is_high_and_map_emitted(self):

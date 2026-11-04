@@ -3055,7 +3055,11 @@ def check_filter_bec(ctx: RunContext) -> List[Finding]:
 def check_unmanaged_accounts(ctx: RunContext) -> List[Finding]:
     if not _module_usable(ctx, "userinvitations"):
         return []
-    rows = ctx.rows("userinvitations")
+    # ACCEPTED means the account was already converted to a managed one;
+    # DECLINED is still a live personal account, so it stays (its State
+    # column says which).
+    rows = [r for r in ctx.rows("userinvitations")
+            if col(r, "state").upper() != "ACCEPTED"]
     if not rows:
         return []
     evidence = [{"Email": col(r, "email"),
