@@ -1139,7 +1139,8 @@ def _logical_lines(text, lang):
         else:
             carried = quote
             raw, quote = _strip_comment(raw, lang, quote)
-            start_doc = None if carried else _heredoc_start(raw, lang)
+            # a quote carried from the line before closes on this one: read it from that quote (x="a \ / b"; python3 - <<'EOF')
+            start_doc = _heredoc_start(carried + raw, lang) if carried in ('', '"', "'") else None
             if start_doc:
                 pending, quote, opener = pending + start_doc, '', n
         stripped = raw.rstrip()
@@ -1558,7 +1559,8 @@ class Checker:
                     # python3 - <<'EOF' runs that heredoc as a program, so it is also read as Python (CHK-16);
                     # the shell reader still reads the body, since an unquoted <<EOF runs $(...) in it first
                     doc = self._python_heredoc(segments[i], lines.bodies.get(n),
-                                               sum(t in ('<<', '<<-') for s in segments[:i] for t in s))
+                                               sum(t in ('<<', '<<-') for s in segments[:i] for t in s),
+                                               segments[i - 1] if i else [])
                     if isinstance(doc, str):
                         findings.append(Finding(ctx.file, n, UNKNOWN, doc, short(seg), note='check the Python it runs on its own'))
                     elif doc:
@@ -1731,12 +1733,12 @@ class Checker:
             return tok
         return None
 
-    def _python_heredoc(self, raw, docs, before):
+    def _python_heredoc(self, raw, docs, before, prev=()):
         """For python reading its program from a heredoc on this segment: that heredoc's body lines;
         a reason string when the checker cannot tell what it runs; else None.
 
         raw is the segment with its redirects, docs the line's heredoc bodies, before the number of
-        heredocs earlier on the line. Only options that leave the source as read are followed:
+        heredocs earlier on the line, prev the segment before it (a $(...) substitution ends there). Only options that leave the source as read are followed:
         -x skips the first line, and a later < or <<< replaces the heredoc as stdin.
         """
         seg = self._drop_redirects(raw)
@@ -1750,10 +1752,13 @@ class Checker:
         if k < len(seg) and not is_py(seg[k]) and name(seg[k]) in PREFIX_WORDS - SCRIPT_RUNNERS:
             k = next((j for j in range(k + 1, len(seg)) if is_py(seg[j])), len(seg))
         own = [j for j, t in enumerate(raw) if t in ('<<', '<<-')]
-        # $(command -v python3) - <<'EOF' reaches here as '- << EOF', `which python3` - as '`which': the
-        # program came from a substitution
-        if docs and own and k < len(seg) and seg[k].startswith(('-', '`', '$(')):
-            return 'the program reading this heredoc is chosen at runtime'
+        # a substitution naming python chose the program: $(which python3) <<'EOF' reaches here as '<< EOF'
+        # after a segment holding python3, `which python3` - <<'EOF' as '`which' 'python3`' '-'
+        if docs and own:
+            tick = next((j for j in range(k + 1, len(seg)) if seg[j].endswith('`')), k) if k < len(seg) and seg[k].startswith('`') else None
+            if (tick is not None and any(is_py(t) for t in seg[k:tick + 1])) or \
+                    ((k >= len(seg) or seg[k].startswith('-')) and any(is_py(t) for t in prev)):
+                return 'the program reading this heredoc is chosen at runtime'
         if not docs or not own or k >= len(seg) or not is_py(seg[k]):
             return None
         args = seg[k + 1:]
