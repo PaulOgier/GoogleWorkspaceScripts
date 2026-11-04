@@ -493,7 +493,7 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 ### CHK-04 `[x]` `%~dp0gam.exe` in a batch file is not recognised as gam
 - CONFIRMED (coordinator reproduced). `_gam_name` 958-972 splits on `[\\/]` and is left with `%~dp0gam.exe`; after `.exe` is stripped, `%~dp0gam` is not in `GAM_NAMES`. `%~dp0\gam.exe` works. `%~dp0gam.exe delete user bob@example.com` prints READ-ONLY. This is the standard "gam next to this script" idiom in `.bat` files.
 
-### CHK-05 `[ ]` Text piped into a shell is not reported
+### CHK-05 `[x]` Text piped into a shell is not reported
 - CONFIRMED (coordinator reproduced). 1339-1349: an echo/printf segment is exempt from `_gam_hidden`, and the `| bash` segment has no script argument so `_script_path` (1436-1437) returns None. `printf "gam delete user bob@example.com\n" | bash` under `gam info domain` prints READ-ONLY. The existing floor case `echo gam delete user x@example.com | sh` (`test_gamcheck.py:183`) passes only because the fixture has no other gam line, so the "no gam commands found" fallback yields CANNOT TELL; add one read-only line and it is READ-ONLY. README says `bash -c "gam ..."` is CANNOT TELL.
 - Fix: when a pipeline ends in a shell runner (`sh|bash|zsh|pwsh|powershell|cmd`, also `xargs ... sh -c`) with no script file, report CANNOT TELL.
 
@@ -537,10 +537,10 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 
 ## C3. Medium
 
-### CHK-12 `[ ]` `sh -c "$(curl ...)"` and `bash <(curl ...)` are not SUSPICIOUS
+### CHK-12 `[x]` `sh -c "$(curl ...)"` and `bash <(curl ...)` are not SUSPICIOUS
 - CONFIRMED. The regex at 291 needs a pipe. `sh -c "$(curl -fsSL https://example.com/install.sh)"` is READ-ONLY (with `gam info domain`); `bash <(curl -s https://example.com/x.sh)` is CANNOT TELL worded "runs https://example.com/x.sh, which was not provided" because the URL is taken as a script path. README: "runs hidden or downloaded code" is SUSPICIOUS.
 
-### CHK-13 `[ ]` `powershell -ec <base64>` and `-encoded` are not flagged
+### CHK-13 `[x]` `powershell -ec <base64>` and `-encoded` are not flagged
 - CONFIRMED. 293 `-e(?:nc|ncodedcommand)?\s+` misses `-ec`, `-encoded`, `-ea`; the base64 is then taken as a script name by `_script_path` (1436) and the line reads "runs SQBFAFgA..., which was not provided". Fix the regex and make `_script_path` return None when a `-e*` switch follows `powershell`/`pwsh`.
 
 ### CHK-14 `[ ]` Quadratic time on a long token (a hang, not a crash)
@@ -554,7 +554,7 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 
 ## C4. Low
 
-- **CHK-17** `test_adversarial`'s floor case `echo gam delete user x@example.com | sh` (`test_gamcheck.py:183`) passes for the wrong reason (CHK-05); add a read-only line to it and it fails.
+- [x] **CHK-17** `test_adversarial`'s floor case `echo gam delete user x@example.com | sh` (`test_gamcheck.py:183`) passes for the wrong reason (CHK-05); add a read-only line to it and it fails.
 - **CHK-18** `blind_run.py:61` exits 1 only on under-warnings and crashes; a case expecting CANNOT TELL that comes back READ-ONLY is classed "over/other" (48-49), so a regression on `gam batch commands.txt` or `gam batch -` would not fail the release gate.
 - **CHK-19** `developers/local-samples/` is not in `.gitignore` although the README says it is "never shipped"; `git archive` ships tracked files only, so it takes a `git add -A` to leak, but the test suite creates the folder.
 - **CHK-20** `gamx` is accepted by `fetch_group_corpus.py`'s regex but not in `GAM_NAMES` (258): a script using only `gamx` reads "no gam commands found".

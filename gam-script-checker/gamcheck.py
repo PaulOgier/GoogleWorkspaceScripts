@@ -290,10 +290,16 @@ LOCAL_RULES = [
     (CHANGES, r'(?i)\breg\s+add\b', 'changes the Windows registry'),
     (SUSPICIOUS, r'(?i)\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b', 'downloads a script and runs it'),
     (SUSPICIOUS, r'(?i)\b(?:iex|Invoke-Expression)\b', 'runs text as PowerShell code'),
-    (SUSPICIOUS, r'(?i)(?:^|\s)-e(?:nc|ncodedcommand)?\s+[A-Za-z0-9+/=]{24,}', 'runs a hidden (encoded) PowerShell command'),
+    (SUSPICIOUS, r'(?i)(?:^|\s)[-/]e(?:c|a|n[a-z]*)?\s+[A-Za-z0-9+/=]{24,}', 'runs a hidden (encoded) PowerShell command'),
     (SUSPICIOUS, r'(?i)\bFromBase64String\b|\bbase64\s+(?:-d|--decode|-D)\b', 'decodes hidden content'),
     (UNKNOWN, r'(?:^|[\s;&|(])eval\s', 'runs text built at runtime as a command'),
 ]
+# sh -c "$(curl ...)", bash <(curl ...), source <(wget ...): downloaded code run without a pipe
+DOWNLOAD_RUN = re.compile(r'(?i)(?:\b(?:ba|z|da|k)?sh\b(?:\s+-\w+)*\s+-c\s+["\']?\$\(\s*(?:curl|wget)\b'
+                          r'|(?:\b(?:ba|z|da|k)?sh|\bsource|(?:^|[\s;&|])\.)\s+<\(\s*(?:curl|wget)\b)')
+# Programs that run text piped into them as code: printf "gam delete ..." | bash
+PIPE_RUNNERS = {'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'pwsh', 'powershell', 'cmd', 'python', 'python3', 'py',
+                'perl', 'ruby'}
 # gam named inside a quoted string handed to another program: bash -c "gam ...", "$(gam ...)"
 FD_REDIRECT = re.compile(r'(^|\s)\d(?=[<>])')
 # Commands whose arguments are file paths, never commands to run: a gam path or a
@@ -958,6 +964,16 @@ class Context:
         return inner
 
 
+def _ps_inline(tok):
+    """True for a PowerShell switch that runs code given on the command line: -c, -Command, -e, -ec, -EncodedCommand, -ea.
+
+    PowerShell takes any unambiguous prefix, so -enc and -encodedc count; -ExecutionPolicy does not.
+    """
+    x = tok.lower().lstrip('-/') if tok[:1] in '-/' else ''
+    return bool(x) and (x in ('ec', 'ea') or 'encodedcommand'.startswith(x) or 'encodedarguments'.startswith(x)
+                        or (x.startswith('c') and 'command'.startswith(x)))
+
+
 def _gam_name(tok, gam_vars, wrappers):
     """True when a token names the gam executable, a variable holding its path, or a wrapper function."""
     if tok is None:
@@ -1408,6 +1424,9 @@ class Checker:
                                                 short(seg), note='handed to another program (bash -c, ssh, Start-Process); check the inner command on its own'))
                     elif (script := self._script_path(seg)) is not None:
                         findings.extend(ctx.follow_script(script, n, short(seg), seg))
+                    elif (runner := self._piped_shell(seg, seps[i - 1] if i else '')) is not None:
+                        findings.append(Finding(ctx.file, n, UNKNOWN, f'runs the text piped into {runner} as code',
+                                                short(seg), note='check the piped text on its own'))
                     elif (var := self._variable_program(seg, lang, seps[i - 1] if i else '')) is not None:
                         findings.append(Finding(ctx.file, n, UNKNOWN, f'runs a program named by the variable {var}',
                                                 short(seg), note=f'if {var} holds gam, check the command with gam written out'))
@@ -1418,6 +1437,9 @@ class Checker:
                     continue  # the body of a wrapper function; its callers are checked instead
                 findings.extend(self.gam.parse(args, ctx, n))
             findings.extend(self._local(' '.join(t for t in local_text if t), ctx, n))
+            if DOWNLOAD_RUN.search(body) and not any(f.level == SUSPICIOUS for f in findings[first:]):
+                findings.append(Finding(ctx.file, n, SUSPICIOUS, 'downloads a script and runs it', short([body]),
+                                        note='on this computer'))
             if n in dead:
                 for f in findings[first:]:
                     f.aside = f.aside or 'not-run'
@@ -1493,10 +1515,29 @@ class Checker:
         if re.split(r'[\\/]', word)[-1].lower().removesuffix('.exe') not in SCRIPT_RUNNERS:
             return None
         args = [t.strip('`"\'') for t in seg[k + 1:]]
-        if any(t.lower() in ('-m', '-c', '-command', '-encodedcommand') for t in args):
+        if any(t.lower() in ('-m', '-c') or _ps_inline(t) for t in args):
             return None
-        names = [t for t in args if not t.startswith('-')]
+        names = [t for t in args if not t.startswith(('-', 'http://', 'https://'))]
         return next((t for t in names if t.lower().endswith(SCRIPT_EXTS)), names[0] if names else None)
+
+    @staticmethod
+    def _piped_shell(seg, before):
+        """The shell or interpreter a pipe feeds as code (... | bash, | sudo sh -s, | python3 -), or None."""
+        if before not in ('|', '|&'):
+            return None
+        k = 0
+        while k < len(seg) and (re.fullmatch(r'[A-Za-z_]\w*=.*', seg[k]) or
+                                (seg[k].lower() in PREFIX_WORDS and seg[k].lower() not in PIPE_RUNNERS)):
+            k += 1
+        if k >= len(seg):
+            return None
+        word = re.split(r'[\\/]', seg[k].strip('`"\''))[-1].lower().removesuffix('.exe')
+        args = [t.strip('`"\'') for t in seg[k + 1:]]
+        if word not in PIPE_RUNNERS or any(t.lower() in ('-c', '/c') or _ps_inline(t) for t in args):
+            return None
+        if any(not t.startswith('-') for t in args):
+            return None  # a script file was named; _script_path follows it
+        return word
 
     @staticmethod
     def _variable_program(seg, lang, before):
