@@ -171,7 +171,8 @@ the full module registry with keys and tiers.
 ### Accounts, licences and dormant users
 
 - Unmanaged (personal) Google accounts on company domains [High]
-- Accounts stacking multiple risk factors [High]
+- Accounts stacking multiple risk factors [Medium; High when an admin is
+  among them]
 - Accounts Google itself suspended for abuse or compromise [High]
 - Users whose password Google rates weak or shorter than the tenant's own
   minimum [Medium]
@@ -618,6 +619,15 @@ to do" copy in each finding is written for that human.
 `--dry-run` prints every GAM command without executing it, so you can review
 the whole list before the first real run. The preflight still runs
 `gam version` and `gam info domain`.
+
+### What does it connect to besides GAM?
+
+At start it reads the latest version number from `raw.githubusercontent.com`
+to say whether an update is out (not with `--list` or `--render-only`). The
+preflight checks `www.googleapis.com` is reachable. The DNS module sends each
+domain name, and the DKIM selector, to `tamingdns.com`, or queries
+`dns.google` when tamingdns.com is unreachable. Nothing else leaves the
+machine except GAM's own calls to Google.
 
 ### How do I find files shared publicly in Google Drive across the whole domain?
 
