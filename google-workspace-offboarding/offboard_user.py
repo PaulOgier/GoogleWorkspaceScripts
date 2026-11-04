@@ -2494,6 +2494,8 @@ def manage_devices(email: str, _dry_run: bool) -> None:
         )
     elif len(mobile_lines) > 1:
         print_warning("Mobile devices found. Review and wipe manually:")
+        # The listing carries the resourceId the commands below need (OFF-07).
+        print_info("\n" + "\n".join(mobile_lines))
         print_info("  Account wipe (corp data): gam update mobile <resourceId> action account_wipe")
         print_info("  Factory reset: gam update mobile <resourceId> action wipe")
         summary_action("Mobile devices found and listed for review")
@@ -2510,6 +2512,7 @@ def manage_devices(email: str, _dry_run: bool) -> None:
         )
     elif len(cros_lines) > 1:
         print_warning("ChromeOS devices found. Review and disable/deprovision manually:")
+        print_info("\n" + "\n".join(cros_lines))
         print_info("  Disable: gam update cros <deviceId> action disable")
         print_info("  Deprovision: gam update cros <deviceId> action deprovision_retiring_device")
         summary_action("ChromeOS devices found and listed for review")

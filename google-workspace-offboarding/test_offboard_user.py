@@ -966,6 +966,15 @@ class TestGroupsAndDevices(OffboardTestCase):
             offb.manage_devices(U, False)
         return fake
 
+    def test_found_devices_are_printed_with_their_ids(self):
+        """OFF-07: "listed for review" printed only a count."""
+        printed = []
+        with mock.patch.object(offb, "print_info", printed.append):
+            self._devices((True, f"resourceId,email\nRES123,{U}\n"),
+                          (True, f"deviceId,annotatedUser\nDEV456,{U}\n"))
+        self.assertTrue(any("RES123" in p for p in printed), printed)
+        self.assertTrue(any("DEV456" in p for p in printed), printed)
+
     def test_no_devices_from_captured_output(self):
         fake = self._devices((True, stdout_only(fixture("print_mobile_none"))),
                              (True, stdout_only(fixture("print_cros_none"))))
