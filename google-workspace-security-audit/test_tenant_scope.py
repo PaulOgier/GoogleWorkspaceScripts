@@ -2048,6 +2048,32 @@ class TestCompareWithPrevious(unittest.TestCase):
         self.assertIn("Top actions", html)
         self.assertIn("<li><strong>title b</strong>. Fix it.</li>", html)
 
+    def test_one_to_many_rows_compare_row_by_row(self):
+        # AUD-07: one file shared with two people was one evidence id.
+        def shares(*people):
+            f = ts.Finding("external-user-shares", "MEDIUM", "t", "m", "r. s",
+                           [{"File": "Untitled document", "Owner": "u@example.com",
+                             "File ID": "F1", "Shared with": p} for p in people],
+                           "mydrive_external.csv")
+            f.modules = ["users"]
+            return f
+        prev = self.make_run("tenant_audit_20260901_000000")
+        ts.render_html(prev, [shares("a@gmail.com", "b@gmail.com")])
+        ctx = self.make_run("tenant_audit_20261001_000000",
+                            collected="2026-10-01 08:00")
+        now = shares("b@gmail.com", "c@gmail.com")
+        history = ts.compare_with_previous(ctx, [now], ts.find_previous_run(ctx))
+        self.assertEqual("new", now.row_changes["external-user-shares:f1|c@gmail.com"])
+        self.assertEqual("persisting",
+                         now.row_changes["external-user-shares:f1|b@gmail.com"])
+        self.assertEqual(1, history["resolved_rows"])
+
+    def test_evidence_ids_unique_within_each_finding(self):
+        rows = [{"Org unit": "/", "Protection": p} for p in ("a", "b", "c")]
+        f = ts.Finding("gmail-protections-off", "MEDIUM", "t", "m", "r",
+                       rows, "policies.csv")
+        self.assertEqual(3, len({ts._evidence_id(f, r) for r in rows}))
+
     def test_raised_check_is_not_compared(self):
         # AUD-02: the check that found "fwd" last run raised this run.
         prev = self.make_run("tenant_audit_20260901_000000")

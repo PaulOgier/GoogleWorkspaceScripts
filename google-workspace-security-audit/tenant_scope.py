@@ -2293,6 +2293,50 @@ class Finding:
         self.row_changes: Dict[str, str] = {}
 
 
+# Columns that together identify one evidence row of a finding whose first
+# column repeats (one file shared with two people, one org unit with three
+# settings off). Volatile columns (dates, counts) are left out so a row that
+# is still there reads as persisting. Keyed on the finding id or its prefix.
+EVIDENCE_KEYS: Dict[str, Tuple[str, ...]] = {
+    "public-files-": ("File ID",),
+    "anyone-link-": ("File ID",),
+    "external-domain-shares": ("File ID", "Shared with"),
+    "external-user-shares": ("File ID", "Shared with"),
+    "external-inbound-shares": ("File", "External owner", "Shared with"),
+    "sd-external-members": ("Shared Drive", "External member"),
+    "delegates-on-admin-mailbox": ("Mailbox", "Delegate"),
+    "groups-external-members-present": ("Group", "External member"),
+    "classroom-external-members": ("Course", "Member"),
+    "classroom-open": ("Org unit", "Setting"),
+    "classroom-settings": ("Org unit", "Setting"),
+    "vault-exports": ("Matter", "Export"),
+    "gmail-protections-off": ("Org unit", "Protection"),
+    "meet-safety-open": ("Org unit", "Setting"),
+    "takeout-enabled": ("Service", "Org unit"),
+    "sd-controls-open": ("Org unit", "Setting"),
+    "2sv-policy-map": ("Setting", "Org unit"),
+    "service-status": ("Service", "Org unit"),
+    "policy-settings-raw": ("Setting", "Org unit"),
+    "policy-baseline": ("Setting", "Org unit", "CISA baseline"),
+    "policy-baseline-info": ("Setting", "Org unit", "CISA baseline"),
+    "admin-role-map": ("Assignee", "Role", "Scope"),
+    "admin-role-suspended-holder": ("User", "Role"),
+    "admin-asps": ("Admin", "App password name"),
+    "filter-external-forwarding": ("User", "Filter forwards to"),
+    "sendas-external": ("User", "Sends as"),
+    "forwarding-addresses-external": ("User", "Forwarding address"),
+    "console-only-settings": ("Admin console app", "Setting"),
+    "suspended-holding-data": ("User", "Holds"),
+}
+
+
+def _evidence_keys(fid: str) -> Optional[Tuple[str, ...]]:
+    if fid in EVIDENCE_KEYS:
+        return EVIDENCE_KEYS[fid]
+    return next((v for k, v in EVIDENCE_KEYS.items()
+                 if k.endswith("-") and fid.startswith(k)), None)
+
+
 def _evidence_id(finding: Finding, row: Dict[str, str]) -> str:
     """Stable identity of one evidence row: the finding id plus the row's
     identifying column, or a short hash of its non-empty cells when it has
@@ -2300,9 +2344,18 @@ def _evidence_id(finding: Finding, row: Dict[str, str]) -> str:
     from findings_evidence.csv, whose columns are the union of every finding's
     and so in a different order."""
     field = finding.id_field
-    if not field and finding.all_evidence:
-        field = next(iter(finding.all_evidence[0]), "")
-    key = str(row.get(field, "") or "")
+    fields = None if field else _evidence_keys(finding.fid)
+    if fields:
+        # Rows read back from findings_evidence.csv drop empty cells, so an
+        # absent column reads as empty. A row of another shape has none of
+        # the columns and falls through to the hash of its cells.
+        key = "|".join(str(row.get(f, "") or "") for f in fields)
+        if not key.strip("|"):
+            key = ""
+    else:
+        if not field and finding.all_evidence:
+            field = next(iter(finding.all_evidence[0]), "")
+        key = str(row.get(field, "") or "")
     if not key:
         cells = {k: str(v) for k, v in row.items() if v not in (None, "")}
         key = hashlib.sha1(json.dumps(cells, sort_keys=True).encode()
