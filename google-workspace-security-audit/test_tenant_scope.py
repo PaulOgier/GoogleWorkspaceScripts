@@ -1666,6 +1666,18 @@ f@example.com,Google-Apps-Unlimited,G Suite Business""")
         self.assertNotIn(ts.CHECK_TITLES["check_licence_waste"],
                          {t for t, _ in self.ctx.clean_checks})
 
+    def test_cloud_identity_premium_without_seat_line_is_not_judged(self):
+        """Review 3: Premium is paid; only free Cloud Identity is skipped."""
+        self.write_domaininfo("Workspace Enterprise Plus Licenses: 1\n")
+        self.write_csv("licenses", "userId,skuId,skuDisplay\n"
+                       "e@example.com,1010020020,Google Workspace Enterprise Plus\n"
+                       "a@example.com,1010050001,Cloud Identity Premium")
+        self.assertEqual([], ts.check_licence_waste(self.ctx))
+        self.ctx.consulted.clear()
+        ts.run_checks(self.ctx)
+        self.assertNotIn(ts.CHECK_TITLES["check_licence_waste"],
+                         {t for t, _ in self.ctx.clean_checks})
+
     def test_seat_count_with_thousands_comma(self):
         """GAM prints counts as f'{value:,}'."""
         owned = ts.parse_owned_licences(
@@ -3940,6 +3952,19 @@ class TestSharedDriveScanAsMember(CtxTestCase):
         status, rows, _ = self.run_with(fake)
         self.assertEqual(("ok", 1), (status, rows))
         self.assertEqual({"org@example.com"}, {c[1] for c in self.calls})
+
+    def test_member_removed_since_acl_read_is_not_an_empty_drive(self):
+        """Live on dev, GAM 7.48.20: exit 60 and a header-only CSV."""
+        def fake(args):
+            if args[1] == "org@example.com":
+                return (60, "Owner,id,name,hasAugmentedPermissions,mimeType\n",
+                        "User: org@example.com, Shared Drive ID: D1, Print "
+                        "Failed: The attempted action requires shared drive "
+                        "membership.\n")
+            return self.two_step("id,name\nF1,a.doc\n")(args)
+        status, rows, _ = self.run_with(fake)
+        self.assertEqual("writer@example.com", self.calls[-1][1])
+        self.assertEqual(("ok", 1), (status, rows))
 
     def test_organizer_first_no_grant(self):
         out = "id,name,permission.type\nF1,a.doc,anyone\n"

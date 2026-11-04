@@ -679,7 +679,7 @@ its requirement. It does not run ScubaGoggles itself.
 python3 -m unittest test_tenant_scope -v
 ```
 
-367 tests, no GAM calls, no fixtures on disk beyond temp directories.
+369 tests, no GAM calls, no fixtures on disk beyond temp directories.
 `python3 test_tenant_scope.py` runs the same tests.
 
 ## Licence

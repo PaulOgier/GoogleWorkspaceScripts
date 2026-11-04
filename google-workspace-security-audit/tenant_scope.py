@@ -1849,7 +1849,12 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
         no_drive = re.compile(
             r"User: " + re.escape(member) + r", (?:\w+ )?(?:Service/App not "
             r"enabled|Service not applicable|Does not exist)", re.IGNORECASE)
-        skipped = any(no_drive.search(ln) for ln in err.splitlines())
+        # Seen on dev, GAM 7.48.20: a user no longer in the drive gets exit
+        # 60, a header-only CSV and "Shared Drive ID: <id>, Print Failed:
+        # The attempted action requires shared drive membership."
+        skipped = any(no_drive.search(ln) or ("Shared Drive ID:" in ln and
+                                               "Failed" in ln)
+                      for ln in err.splitlines())
         if not skipped and (rc == 0 or (rc == 60 and is_header_only(out))):
             return True, out, ""
         return False, "", (err.strip().splitlines()[-1] if err.strip()
@@ -6011,7 +6016,8 @@ def check_licence_waste(ctx: RunContext) -> List[Finding]:
     for sku in assigned:
         # Exact names only: "business" (G Suite Business) is a substring of
         # Business Starter, Standard and Plus, which have no seat line.
-        if sku and "cloud identity" not in sku and sku not in counted:
+        if sku and not re.search(r"cloud identity(?! premium)", sku) \
+                and sku not in counted:
             ctx.consulted.append(("domaininfo", False))
             break
     hits = []
