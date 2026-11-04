@@ -563,6 +563,38 @@ def test_language():
     assert not any('Still' in f.what for f in found), found
 
 
+AUDIT_2026_11 = [
+    # (script text, language, floor or exact level, 'floor' | 'exact')
+    # a # inside a word is code, not a comment
+    ('gam info domain\n[ $# -gt 0 ] && gam delete user "$1"', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nif [ $# -eq 1 ]; then gam delete user "$1"; fi', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nn=${#USER}; gam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nN=$#; gam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\ngam print users#; gam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain # comment; gam delete user x@example.com', 'shell', g.READ, 'exact'),
+    ("gam info domain\necho '# not a comment'; gam print users", 'shell', g.READ, 'exact'),
+    # a comment never continues onto the next line
+    ('gam info domain\n# remove the leaver, see ticket \\\ngam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\n# output goes to C:\\GAM\\\ngam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\n# note `\ngam delete user bob@example.com', 'powershell', g.DESTRUCTIVE, 'floor'),
+    ('gam print users \\\n  query isSuspended=False', 'shell', g.READ, 'exact'),
+    # GAM batch files run one command per physical line
+    ('gam print users \\\ngam delete user bob@example.com', 'gambatch', g.DESTRUCTIVE, 'floor'),
+    ('# gam delete user x@example.com\ngam print users', 'gambatch', g.READ, 'exact'),
+]
+
+
+def test_audit_2026_11(checker):
+    """Under-warnings from the 3 November 2026 audit (CHK-xx), one script per case."""
+    severity = {g.READ: 0, g.CHANGES: 1, g.UNKNOWN: 2, g.DESTRUCTIVE: 3, g.SUSPICIOUS: 4}
+    failures = []
+    for text, lang, level, kind in AUDIT_2026_11:
+        got = g.verdict(checker.check_text(text + '\n', '<t>', lang))
+        if (kind == 'floor' and severity[got] < severity[level]) or (kind == 'exact' and got != level):
+            failures.append(f'{kind} {g.LEVEL_NAMES[level]}, got {g.LEVEL_NAMES[got]} ({lang}): {text!r}')
+    assert not failures, '\n'.join(failures)
+
+
 def main():
     checker = g.Checker()
     n = test_fixture_verdicts(checker)
@@ -578,6 +610,7 @@ def main():
     test_invariants(checker)
     test_modes(checker)
     test_language()
+    test_audit_2026_11(checker)
     print(f'ok: {n} fixtures, details, modes, verb coverage, positive control, paste, gates, adversarial, inert, invariants')
 
 

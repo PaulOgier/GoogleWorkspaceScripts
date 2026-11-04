@@ -981,17 +981,47 @@ def _dynamic(tok, lang):
     return tok
 
 
+def _strip_comment(line, lang):
+    """A physical line without its comment, the way the shell itself finds one.
+
+    A # starts a comment only at the start of a word and outside quotes, so $#, ${#VAR} and
+    word# are code. GAM batch files only skip whole-line comments (doBatch reads the rest with
+    shlex.split, comments off), and cmd.exe has no # comment at all.
+    """
+    if lang == 'batch':
+        return line
+    if lang == 'gambatch':
+        return '' if line.lstrip().startswith('#') else line
+    quote, i = '', 0
+    while i < len(line):
+        c = line[i]
+        if c == ('`' if lang == 'powershell' else '\\') and quote != "'":
+            i += 2
+            continue
+        if c in '\'"' and quote in ('', c):
+            quote = '' if quote else c
+        elif c == '#' and not quote and (i == 0 or line[i - 1] in ' \t;&|()'):
+            return line[:i]
+        i += 1
+    return line
+
+
 def _logical_lines(text, lang):
-    """Join continuation lines and drop comments, keeping the first physical line number."""
+    """Join continuation lines and drop comments, keeping the first physical line number.
+
+    A comment never continues: '# see C:\\GAM\\' must not swallow the next line. GAM batch files
+    have no continuation character (doBatch reads one command per physical line).
+    """
     if lang == 'powershell':
         text = re.sub(r'<#.*?#>', lambda m: '\n' * m.group(0).count('\n'), text, flags=re.S)
-    cont = {'shell': '\\', 'gambatch': '\\', 'powershell': '`', 'batch': '^'}[lang]
+    cont = {'shell': '\\', 'gambatch': None, 'powershell': '`', 'batch': '^'}[lang]
     out, buf, start = [], '', None
     for n, raw in enumerate(text.splitlines(), 1):
+        raw = _strip_comment(raw, lang)
         stripped = raw.rstrip()
         if start is None:
             start = n
-        if stripped.endswith(cont) and not stripped.endswith(cont * 2):
+        if cont and stripped.endswith(cont) and not stripped.endswith(cont * 2):
             buf += stripped[:-1] + ' '
             continue
         buf += raw
@@ -1011,7 +1041,7 @@ def _tokenise(line, lang):
     try:
         lex = shlex.shlex(line, posix=posix, punctuation_chars=';&|()<>')
         lex.whitespace_split = True
-        lex.commenters = '' if lang == 'batch' else '#'
+        lex.commenters = ''  # _logical_lines already removed comments; shlex would also cut $# and ${#X}
         toks = list(lex)
     except ValueError:
         toks = line.split()

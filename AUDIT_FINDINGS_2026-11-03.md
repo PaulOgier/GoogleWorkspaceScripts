@@ -461,7 +461,7 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 - What happens: a paste containing a blank line is cut at the blank line (documented), but the unread lines stay in the tty input buffer and the shell reads them when gamcheck returns. Reproduction (pty running `bash --norc -i`, then `python3 gamcheck.py`, then one paste of `gam print users` / blank / `echo PASTED-TAIL-RAN; gam delete user bob@example.com` / blank): gamcheck prints `VERDICT: READ-ONLY`, then the shell prompt shows `echo PASTED-TAIL-RAN; gam delete user bob@example.com` and runs it. On an admin workstation `gam` exists and the delete runs under a green verdict. gamcheck does not enable bracketed paste (no `ESC[?2004h` in its output); with GNU readline 8.1+ the whole block arrives as one `input()` string, so behaviour differs by platform, and `ttypaste.py` simulates typing rather than a terminal paste so it cannot see this.
 - Fix: after the terminating blank line, drain pending input (POSIX: `select` or `termios.tcflush(fd, TCIFLUSH)`; Windows: `msvcrt.kbhit()`/`getwch()` loop or `FlushConsoleInputBuffer`), and either check the drained lines too or print a loud "N more pasted lines were discarded" warning; consider reading until a short idle timeout instead of a blank line when stdin is a tty. Document the behaviour until fixed.
 
-### CHK-02 `[ ]` A `#` inside a word truncates the rest of the line
+### CHK-02 `[x]` A `#` inside a word truncates the rest of the line
 - Severity Critical. CONFIRMED (coordinator reproduced).
 - Where: `_tokenise` 1014 `lex.commenters = '' if lang == 'batch' else '#'`.
 - What happens: shlex in posix mode starts a comment at any unquoted `#`, even mid-word; bash only at the start of a word. `$#`, `${#VAR}`, `${#ARR[@]}` and `word#` all cut the line. Each of these prints READ-ONLY with a `gam info domain` above it:
@@ -497,11 +497,11 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 - CONFIRMED (coordinator reproduced). 1339-1349: an echo/printf segment is exempt from `_gam_hidden`, and the `| bash` segment has no script argument so `_script_path` (1436-1437) returns None. `printf "gam delete user bob@example.com\n" | bash` under `gam info domain` prints READ-ONLY. The existing floor case `echo gam delete user x@example.com | sh` (`test_gamcheck.py:183`) passes only because the fixture has no other gam line, so the "no gam commands found" fallback yields CANNOT TELL; add one read-only line and it is READ-ONLY. README says `bash -c "gam ..."` is CANNOT TELL.
 - Fix: when a pipeline ends in a shell runner (`sh|bash|zsh|pwsh|powershell|cmd`, also `xargs ... sh -c`) with no script file, report CANNOT TELL.
 
-### CHK-06 `[ ]` A comment ending in `\` (bash) or a backtick (PowerShell) swallows the next line
+### CHK-06 `[x]` A comment ending in `\` (bash) or a backtick (PowerShell) swallows the next line
 - CONFIRMED (coordinator reproduced). `_logical_lines` 984-1001, line 994 joins any line ending in the continuation character; comments do not continue in bash or PowerShell. `# remove the leaver, see ticket \` followed by `gam delete user bob@example.com` prints READ-ONLY; so does a Windows path at the end of a comment (`# output goes to C:\GAM\`) and a PowerShell comment ending in a backtick. Batch `rem ... ^` really does continue in cmd.exe, so batch is right as it stands.
 - Fix: never join when the physical line's first non-blank character is `#` (shell, PowerShell, gambatch).
 
-### CHK-07 `[ ]` GAM batch files have no line continuation, but the checker joins them
+### CHK-07 `[x]` GAM batch files have no line continuation, but the checker joins them
 - CONFIRMED against the GAM 7.48.20 source (`doBatch` reads one command per physical line with `shlex.split(line)`); coordinator reproduced. `_logical_lines` 988 gives `gambatch` a `\` continuation, so a `.txt` with `gam print users \` followed by `gam delete user bob@example.com` prints READ-ONLY while GAM runs both lines.
 - Fix: no continuation character for `gambatch`.
 
