@@ -48,8 +48,8 @@ YOU ASSUME ALL RISK ASSOCIATED WITH THE USE OF THIS SOFTWARE.
 
 Author:       Paul Ogier
 Created:      2026-08-15
-Updated:      2026-10-21
-Version:      1.7.2
+Updated:      2026-11-04
+Version:      1.8.0
 Status:       Production
 Python:       3.9+
 Dependencies: GAM ADV X (GAM7) only. Stdlib only on the Python side.
@@ -119,11 +119,33 @@ Notes that matter when reading results:
     the same and says so in the report; --include-suspended adds suspended
     users to the per-user modules.
   - Backup verification codes are LIVE codes. The collector keeps only the
-    count; the codes themselves are never written to disk.
+    count; the codes are never saved to the run directory (they pass
+    through GAM's anonymous temporary output file).
   - Spam/Trash, suspended-user mail settings and 2-day report lag are stated
     in the report where they apply.
 
 Changelog
+  2026-11-04 - v1.8.0 - Fixes from a full review. External sharing is never
+                        judged without the tenant's domain list. A check that
+                        raises no longer turns last run's findings into
+                        "Resolved"; findings.csv gains a check column.
+                        Licence waste is not listed clean on editions GAM
+                        prints no seat count for. Group-targeted policies
+                        are reported per group. Shared Drives whose managers
+                        are all suspended are reported as having none.
+                        Evidence ids are unique per row, so month-to-month
+                        changes are named. Wrong-tenant refusals write
+                        nothing into the run directory, --render-only
+                        refuses another customer's run, tenants.json is
+                        type-checked and may name each tenant's admin.
+                        Stopped runs exit 130. DNS error replies, untested
+                        DWD scopes, BOM headers, collector exceptions,
+                        partial lists and missing columns no longer read as
+                        clean. Baseline rules match ScubaGoggles, policy
+                        defaults corrected, BEC filter rules sharpened, the
+                        printed PDF keeps its header and severity labels.
+                        The temporary organizer grant is skipped for an
+                        admin who is already a member. 355 tests.
   2026-10-21 - v1.7.2 - A --run-dir holding another customer's run is refused
                         at preflight instead of being resumed under this
                         tenant. A Shared Drive scan that left drives unscanned
@@ -297,7 +319,7 @@ csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 # CONFIGURATION
 ###############################################################################
 
-SCRIPT_VERSION = "1.7.2"
+SCRIPT_VERSION = "1.8.0"
 
 # [OPTIONAL] Startup check against the remote VERSION file. Fail-silent.
 CHECK_FOR_UPDATES = True
