@@ -72,6 +72,26 @@ ACL_CO_ORGANIZER = (
 )
 
 
+_SUBPROCESS_GUARDS = []
+
+
+def _no_subprocess(*_args, **_kwargs):
+    raise AssertionError("test reached a real subprocess")
+
+
+def setUpModule():
+    """Fence real gam, gyb and rclone for every test, inside or outside run_main."""
+    for name in ("run", "Popen"):
+        guard = mock.patch.object(offb.subprocess, name, _no_subprocess)
+        guard.start()
+        _SUBPROCESS_GUARDS.append(guard)
+
+
+def tearDownModule():
+    for guard in _SUBPROCESS_GUARDS:
+        guard.stop()
+
+
 class ScriptedGam:
     """Stand-in for run_gam that answers by argv prefix and records every call.
 
