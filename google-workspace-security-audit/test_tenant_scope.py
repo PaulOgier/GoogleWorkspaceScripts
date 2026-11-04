@@ -3676,6 +3676,29 @@ class TestTempGrantCleanupInterrupted(CtxTestCase):
         return ts.RunContext(self.run_dir, make_args()).manifest["meta"].get(
             "temp_grant_cleanup_failed", [])
 
+    def test_admin_added_since_collection_is_not_granted_or_removed(self):
+        """AUD-41: a stale ACL CSV must not turn the grant's removal into
+        deleting the admin's real membership."""
+        calls = []
+
+        def fake(args, **kw):
+            calls.append(args)
+            if "info" in args and "drivefileacl" in args:
+                if args[4] == "D1":
+                    return 0, json.dumps({"Owner": "admin@example.com",
+                                          "id": "D1", "permission": {
+                                              "role": "writer"}}) + "\n", ""
+                return 56, "", "Permission ID: admin@example.com, Does not exist\n"
+            if "add" in args or "delete" in args:
+                return 0, "", ""
+            return 0, "id,name,mimeType,hasAugmentedPermissions\n", ""
+        ts.run_gam = fake
+        ts.collect_sd_external(self.ctx,
+                               ts.MODULE_BY_KEY["shareddrive_external"])
+        touched = [c[4] for c in calls if "add" in c or "delete" in c]
+        self.assertEqual(["D2", "D2"], touched)   # D1 scanned as a member
+        self.assertEqual([], self.on_disk())
+
     def test_failed_removal_then_ctrl_c(self):
         def delete():
             ts.shutdown_requested = True   # the operator presses Ctrl+C

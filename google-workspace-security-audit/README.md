@@ -279,8 +279,11 @@ non-member scan silently returns zero rows and the drive would look clean.
 Each Shared Drive is therefore listed as one of its own active members,
 organizers first, and nobody's access changes. Only a drive that no member
 can list (none active, or none with a Drive licence) needs the flag. It adds
-the auditing admin as organizer, scans, and removes the grant again. Without
-it, those drives are reported **UNSCANNED**.
+the auditing admin as organizer, scans, and removes the grant again. Just
+before granting, it checks the drive's live permissions: an admin who is
+already a member (added since the ACLs were collected) is scanned as that
+member, with no grant and no removal. Without the flag, those drives are
+reported **UNSCANNED**.
 
 Backup verification codes are never saved to the run directory: the
 collector keeps only the per-user count. GAM's output passes through an

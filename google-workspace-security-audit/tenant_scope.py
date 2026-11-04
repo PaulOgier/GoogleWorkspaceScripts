@@ -1834,6 +1834,30 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
         return False, "", (err.strip().splitlines()[-1] if err.strip()
                            else f"exit {rc}")
 
+    def admin_is_member(drive_id: str) -> bool:
+        """Live check that the admin already holds a permission on the drive.
+
+        GAM 7.50.00 `info drivefileacl ... formatjson` prints one JSON line
+        carrying "permission", or a "Does not exist" warning and a non-zero
+        exit; anything else is read as not a member (the grant path)."""
+        rc, out, err = run_gam(
+            ["user", ctx.admin, "info", "drivefileacl", drive_id, ctx.admin,
+             "adminaccess", "formatjson"],
+            timeout=120, dry_run=ctx.args.dry_run)
+        ctx.stderr_log(mod["key"], err)
+        if ctx.args.dry_run or rc != 0:
+            return False
+        for line in out.splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and isinstance(row.get("permission"),
+                                                    dict) \
+                    and row["permission"].get("role"):
+                return True
+        return False
+
     def scan(drive_id: str, drive_name: str, as_user: str) -> Tuple[bool, str]:
         """List one drive as one user; rows are kept only on success.
 
@@ -1916,6 +1940,15 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
             continue
         if not ctx.args.grant_temp_access:
             unscanned.append(f"{drive_name} ({drive_id})")
+            continue
+        if admin_is_member(drive_id):
+            # Added since shareddriveacls.csv was collected (a resume): the
+            # grant's removal would delete the admin's real membership.
+            ok, _ = scan(drive_id, drive_name, ctx.admin)
+            if not ok:
+                errors += 1
+                failed.append(f"{drive_name} ({drive_id})")
+                unscanned.append(f"{drive_name} ({drive_id}) - scan failed")
             continue
         rc, out, err = run_gam(
             ["user", ctx.admin, "add", "drivefileacl", drive_id,
