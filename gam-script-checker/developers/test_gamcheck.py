@@ -6,6 +6,7 @@ coverage test fails when a GAM release adds a verb with no danger level, so a
 new verb can never default to read-only.
 """
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -404,6 +405,21 @@ def test_paste():
     assert 'gam delete user bob@example.com' in text and 'gam info domain' in text, text
     assert 'gam undelete user' in text, text
     assert '3 more pasted line' in err.getvalue() and 'discard' in calls, (err.getvalue(), calls)
+    # A Ctrl+D typed while waiting in canonical mode is dropped by Linux once readline turns it off,
+    # and input() hangs; so the wait runs with line editing off and puts the terminal back after
+    if os.name == 'posix':
+        import pty, select, termios
+        master, slave = pty.openpty()
+        seen, real_select, saved_stdin = [], select.select, sys.stdin
+        sys.stdin = os.fdopen(slave, 'r', closefd=False)
+        select.select = lambda *a: seen.append(termios.tcgetattr(slave)[3]) or real_select(*a)
+        try:
+            g._input_pending(0.01)
+        finally:
+            select.select, sys.stdin = real_select, saved_stdin
+        after = termios.tcgetattr(slave)[3]
+        os.close(master), os.close(slave)
+        assert seen and not seen[0] & termios.ICANON and after & termios.ICANON and after & termios.ECHO, (seen, after)
     # Prompts copied from forum posts along with the command.
     for prompt in ('$ ', '> ', 'PS C:\\GAM7> ', 'C:\\GAM7>'):
         code, out, _ = run(prompt + 'gam user bob@example.com delete messages query x doit\n', '-')

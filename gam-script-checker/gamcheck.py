@@ -2641,10 +2641,25 @@ def _input_pending(timeout):
         import msvcrt
     except ImportError:
         import select
+        # Linux drops a Ctrl+D typed in canonical mode once readline turns it off, so input() would
+        # hang; waiting with line editing off, as readline reads, keeps it a byte readline sees
+        old = None
+        try:
+            import termios
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            raw = old[:3] + [old[3] & ~(termios.ICANON | termios.ECHO)] + old[4:6] + [list(old[6])]
+            raw[6][termios.VMIN], raw[6][termios.VTIME] = 1, 0
+            termios.tcsetattr(fd, termios.TCSANOW, raw)
+        except (ImportError, OSError, ValueError, AttributeError):
+            old = None
         try:
             return bool(select.select([sys.stdin], [], [], timeout)[0])
         except (OSError, ValueError):
             return False
+        finally:
+            if old is not None:
+                termios.tcsetattr(fd, termios.TCSANOW, old)
     import time
     end = time.monotonic() + timeout
     while time.monotonic() < end:
