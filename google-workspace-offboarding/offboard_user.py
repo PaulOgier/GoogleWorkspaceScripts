@@ -1065,11 +1065,13 @@ def run_gam(args: List[str], dry_run: bool = True,
             f"GAM command not found: {GAM_COMMAND}. "
             f"Ensure GAM7 is installed and in your PATH."
         )
-        summary_error("GAM7 not found in PATH")
+        if not suppress_summary_error:
+            summary_error("GAM7 not found in PATH")
         return False, "Not found"
     except Exception as e:
         print_error(f"Unexpected error: {e}")
-        summary_error(f"Exception: {e}")
+        if not suppress_summary_error:
+            summary_error(f"Exception: {e}")
         return False, str(e)
 
 
@@ -1382,6 +1384,15 @@ def check_dependencies(need_gyb: bool = False, need_rclone: bool = False,
     ou_ok, ou_output = probes["ou"]
     if ou_ok:
         print_success(f"Offboarding OU exists: {OFFBOARDING_OU}")
+    elif not success:
+        # Both reads failed: GAM itself is failing (an expired or revoked
+        # token reads like this), so do not send the operator off to create
+        # an OU that may well exist (OFF-13).
+        print_error(
+            f"GAM could not read the domain or the offboarding OU. Fix GAM "
+            f"first: {output.splitlines()[0] if output else 'no output'}"
+        )
+        return False
     else:
         print_error(
             f"Offboarding OU '{OFFBOARDING_OU}' does not exist or is not "

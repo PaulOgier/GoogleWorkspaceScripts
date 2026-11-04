@@ -572,6 +572,29 @@ class TestDestinationPreflight(OffboardTestCase):
             self.assertTrue(self._deps(lambda cmd: f"/usr/bin/{cmd}", dry_run=False))
             self.assertTrue(root.is_dir())
 
+    def test_general_gam_failure_is_not_blamed_on_the_ou(self):
+        """OFF-13: an expired token failed info domain without "oauth" in the
+        text, then the OU probe failed too and OU-creation steps printed."""
+        fake = FakeGam([(("info", "domain"), (False, "invalid_grant: Token has been expired or revoked")),
+                        (("info", "org"), (False, "invalid_grant: Token has been expired or revoked"))])
+        printed = []
+        with gam(fake), mock.patch.object(offb.shutil, "which", lambda c: f"/usr/bin/{c}"), \
+             mock.patch.object(offb, "print_error", printed.append), \
+             mock.patch.object(offb, "print_success", printed.append):
+            self.assertFalse(offb.check_dependencies(dry_run=True))
+        self.assertFalse(any("create org" in p for p in printed), printed)
+        self.assertTrue(any("invalid_grant" in p for p in printed), printed)
+
+    def test_suppressed_probe_that_cannot_start_gam_records_no_error(self):
+        """OFF-13: the FileNotFoundError branch ignored suppress_summary_error."""
+        def missing(*_a, **_k):
+            raise FileNotFoundError
+        with mock.patch.object(offb.subprocess, "run", missing):
+            ok, _ = offb.run_gam(["info", "domain"], dry_run=False,
+                                 suppress_summary_error=True)
+        self.assertFalse(ok)
+        self.assertEqual(offb.summary_errors, [])
+
     def test_missing_gyb_fails_the_dependency_check(self):
         which = lambda cmd: None if cmd == offb.GYB_COMMAND else f"/usr/bin/{cmd}"
         printed = []
