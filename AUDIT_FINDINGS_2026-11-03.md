@@ -151,55 +151,72 @@ No Critical finding. No path was found that suspends or deletes anyone other tha
 
 ## A3. Low
 
-### OFF-10 `[ ]` Log file contains ANSI colour codes on interactive runs
+### OFF-10 `[x]` Log file contains ANSI colour codes on interactive runs
+- Done (`3745d8a`): _PlainFormatter copied from the audit; file handler only.
 - CONFIRMED. `_emit` (831-840) embeds `Colours.*` codes in the message and the `FileHandler` (776-783) receives the same record; colours are stripped only when stdout is not a TTY. The audit's `tenant_scope.py` already has a `_PlainFormatter` that strips them; copy it.
 
-### OFF-11 `[ ]` `_stream_process` reads in 256-character blocks, not as lines appear
+### OFF-11 `[x]` `_stream_process` reads in 256-character blocks, not as lines appear
+- Done (`a609855`): binary pipe, read1(4096), incremental UTF-8 decoder; test fakes now BytesIO. Measured on HEAD: a short line arrived at 3.0 s (child exit).
 - CONFIRMED (measured 2.5 s delay). `proc.stdout.read(256)` at 1078 blocks until 256 characters or EOF, so short GYB/rclone lines are logged late. Use `read1`/`os.read` on the raw buffer, or `readline` with `\r` handling.
 
-### OFF-12 `[ ]` Snapshot Gmail reads on a mailbox-less (Cloud Identity) leaver are recorded as errors
+### OFF-12 `[x]` Snapshot Gmail reads on a mailbox-less (Cloud Identity) leaver are recorded as errors
+- Done (`15021b1`): the three Gmail reads still run when has_mailbox is False (the field can be wrong, OFF-19) but suppress the summary error and note the miss in the snapshot. Control errors on HEAD's missing kwarg, not on behaviour.
 - PLAUSIBLE. `preflight_snapshot` 2110-2116 issues `show delegates`, `show forward`, `show sendas` without `suppress_summary_error`; for a Gmail-off user these fail (exit 73 per the script's own note at 1548-1552), so a `--no-transfer` offboarding records three errors and exits 1 although everything applicable succeeded. `has_mailbox` is known in `main()` and already drops `popimap` for this case; use it for the snapshot too.
 
-### OFF-13 `[ ]` Dependency check misattributes a general gam failure to a missing OU
+### OFF-13 `[x]` Dependency check misattributes a general gam failure to a missing OU
+- Done (`7a96c8a`): both probes failing reports GAM's own error, no OU remediation; FileNotFoundError and Exception branches honour suppress_summary_error.
 - CONFIRMED by logic. 1265-1313: an `info domain` failure whose text lacks "oauth"/"unauthorized"/"credentials" (for example `invalid_grant: Token has been expired or revoked`) falls through to the OU probe, which also fails, and prints OU-creation remediation. Also `run_gam`'s `FileNotFoundError` and generic `Exception` branches (1052-1062) ignore `suppress_summary_error`, so "suppressed" probes can still add summary errors.
 
-### OFF-14 `[ ]` A failed alias read quietly weakens the self-transfer guard
+### OFF-14 `[x]` A failed alias read quietly weakens the self-transfer guard
+- Done (`d4d30f0`): _list_aliases returns None on a failed read; _same_account(); preflight and restore-only refuse, the interactive re-ask asks again, transfer_aliases records an error. Also imported typing.Set (Python 3.15's deferred annotations hid the NameError 3.8 to 3.13 would raise).
 - CONFIRMED. `_list_aliases` (2880) returns `[]` on failure; `preflight_destinations` (1488-1490, 1870-1871) then only checks the literal address and continues. Apply the script's own rule that an unreadable list counts as unknown, not as absent.
 
-### OFF-15 `[ ]` Failed delegate query prints a green `[OK]`
+### OFF-15 `[x]` Failed delegate query prints a green `[OK]`
+- Done (`fbdb40a`): success/failure branched; failure prints the manual command.
 - CONFIRMED. `cleanup_delegates` 2652-2653: `print_success("No delegates found or unable to query.")` on a failed query; the summary error is recorded so the exit code is right, but the phase output is wrong. Branch on `success` and name the manual command as `remove_groups` does.
 
-### OFF-16 `[ ]` Forwarding verification uses a substring match
+### OFF-16 `[x]` Forwarding verification uses a substring match
+- Done (`fbdb40a`): the Forwarding Address value is parsed and compared whole.
 - CONFIRMED. `setup_forwarding` 3891: `forward_to.lower() in status_line` lets `sam@x.com` be "verified" by an accepted `isam@x.com`; the following `forward on` fails with "Invalid forwarding address" and the diagnostic points away from the real cause (still pending). Parse `Forwarding Address: <addr>,` and compare equal.
 
-### OFF-17 `[ ]` `--backup-email` archive recorded as covered before the migration runs
+### OFF-17 `[x]` `--backup-email` archive recorded as covered before the migration runs
+- Done (`a921b57`): archive_note passed to migrate_email; recorded after verify_backup_complete passes.
 - CONFIRMED. 5383-5395 records "Email archive: covered by the migration's retained GYB backup" before `migrate_email`; if it returns early the summary still says archived. Record it inside `migrate_email` after `verify_backup_complete` passes.
 
-### OFF-18 `[ ]` Prompts can appear mid-run after the plan was confirmed
+### OFF-18 `[x]` Prompts can appear mid-run after the plan was confirmed
+- Done (`a921b57`): collect_plan picks the email and Drive backup folders (prompting there) and print_plan shows them; the phases take backup_path. No main-flow control for the prompt itself; the unit control errors on HEAD's missing kwarg.
 - CONFIRMED. `_select_backup_path` (3481-3523) prompts "Found an existing ... backup ... sync into it?" from inside the Drive backup and the email migration when `--force` is absent, including in dry run (`backup_drive_rclone` calls it before its `dry_run` branch, 4333). `run_offboarding`'s docstring says the run is unattended after the plan. Decide the folder in `collect_plan` and echo it in the plan.
 
-### OFF-19 `[ ]` `has_mailbox` is read from a field the code elsewhere calls unreliable
+### OFF-19 `[x]` `has_mailbox` is read from a field the code elsewhere calls unreliable
+- Done (`9bfafe9`): warning and summary warning naming gam user X imap off / pop off (both checked in GAM 7.50.00 source: setImap, setPop).
 - PLAUSIBLE. `main()` 5129 reads "Mailbox is setup"; `_email_mailbox_missing`'s docstring (1551-1562) says that field stays False on licensed, restorable mailboxes. A False reading drops `popimap` from deprovision (2256-2258) and the log does not say POP/IMAP were left on. Mitigated by the password scramble, token revocation and suspension. At minimum log the omission.
 
-### OFF-20 `[ ]` `_gyb_db` creates an empty `msg-db.sqlite` where none exists
+### OFF-20 `[x]` `_gyb_db` creates an empty `msg-db.sqlite` where none exists
+- Done (`9bfafe9`): _gyb_db raises FileNotFoundError for a missing DB; test helpers create the file first (46a1289, 16fa409).
 - CONFIRMED (side effect), consequence latent. `_gyb_db` (2987) has no existence check; `count_undated_messages` and `_message_dates` can create a 0-byte DB, after which `_select_email_backup_path` treats the folder as a backup. `verify_backup_complete` and `_restored_count` guard; add the same guard to `_gyb_db`.
 
-### OFF-21 `[ ]` Duplicate-collision warning prints negative and zero counts
+### OFF-21 `[x]` Duplicate-collision warning prints negative and zero counts
+- Done (`b6c4063`): with named duplicates the shortfall is at least len(duplicates) and a padded folder is said to be padded.
 - CONFIRMED (reproduced). `verify_drive_backup_complete` 4213-4219 and 4240-4244: with local leftovers from an earlier sync plus one rclone duplicate the output is "3 file(s) owned in Drive but 5 on disk (-2 missing)" and "short by 0 file(s)". Clamp at zero and word the padding case as the comment describes.
 
-### OFF-22 `[ ]` Unverified Drive reconciliation leaves no summary trace
+### OFF-22 `[x]` Unverified Drive reconciliation leaves no summary trace
+- Done (`b6c4063`): intended as a gap, so a summary warning now; the pinned test was changed to expect it.
 - CONFIRMED and pinned by `test_gam_failure_does_not_raise_or_warn`. 4188-4195: a failed or timed-out `print filelist` prints `[WARN]` and returns `(0, 0)` with no `summary_warning`, so "Drive backed up via rclone" reads as verified. Decide whether that is intended; if not, add the warning and change the test.
 
-### OFF-23 `[ ]` Flags silently ignored despite the README's "usage errors, not silent overrides"
+### OFF-23 `[x]` Flags silently ignored despite the README's "usage errors, not silent overrides"
+- Done (`a4e9024`): all listed combinations refused in parse_args; restore-only also refuses every other skip and destination flag; --forward-alias-to stays accepted with --no-transfer (builder relies on it). README flag rows updated.
 - CONFIRMED by probing `parse_args`. Accepted and ignored: `--reuse-email-backup` with `--no-suspend`, `--no-drive`, `--drive-to`, `--allow-orphaned-shared-drives`; `--scorched-earth` with `--forward-alias-to` (and the mail-capture block is never printed on the scorched path, 5356); `--no-transfer` with `--all-transfer-to`/`--drive-to`; `--allow-orphaned-shared-drives` without `--scorched-earth`. The comment at 4965-4968 says these should be usage errors.
 
-### OFF-24 `[ ]` Pre-logging failures surface as tracebacks
+### OFF-24 `[x]` Pre-logging failures surface as tracebacks
+- Done (`dcf7b48`): --user validated in parse_args with the prompt's pattern; setup_logging OSError exits 2; --log-dir expanduser. Real-process test runs with PATH limited to the Python directory.
 - CONFIRMED by logic. `setup_logging` (771 `mkdir`, FileHandler open) is unguarded and `--user` from the command line bypasses `prompt_email`'s regex, so an unwritable `--log-dir` or a `--user` containing `:` `*` `?` gives a raw traceback. Also `--log-dir` is not `expanduser()`-ed (5059) while `--backup-dir` is; the builder quotes `'~/logs'`, so a directory literally named `~` is created.
 
-### OFF-25 `[ ]` Docs and exit-code drift
+### OFF-25 `[x]` Docs and exit-code drift
+- Done (`b375ffb`): (a) README snapshot list; (b) --force without --user is a usage error, examples carry --user; (c) admin hold exits 2, pinned test changed; (d) in OFF-09; (e) builder banner and restore-only --force demand, README domain field; (f) comment.
 - CONFIRMED (three reviewers). (a) README "Pre-flight snapshot" lists signature, Drive settings and devices; the JSON holds user info, groups, aliases, delegates, forwarding, send-as and licences (sendas carries the signature). (b) README says `--user` is prompted only without `--force`; `main()` 5053-5057 prompts regardless, so the epilog example `--doit --force --scorched-earth` blocks on a prompt and exits 2 with a closed stdin. (c) The admin-account hold exits 1 via `finish_run` (5120-5124, pinned by `test_admin_account_blocks_before_any_write`) while every other preflight refusal exits 2; README says 2 is "nothing or little ran". (d) `--restore-batch-size` docs say 1 is allowed (see OFF-09). (e) Builder banner says no Execute combination skips containment, but restore-only does; builder says restore-only "Needs --force", the script does not; README mentions a builder "domain" field that does not exist. (f) `check_for_updates()` is labelled "Non-blocking" at 5071 but is a synchronous 3 s `urlopen` on every run.
 
-### OFF-26 `[ ]` Builder: PowerShell trailing-backslash quoting and brittle profile load
+### OFF-26 `[x]` Builder: PowerShell trailing-backslash quoting and brittle profile load
+- Done (`783459e`): (a) trailing backslashes doubled for a spaced PowerShell path; not run on a Windows PowerShell 5.1 console (owed on the Windows VM). (b) mode and labels validated on load.
 - PLAUSIBLE for (a), CONFIRMED for (b). (a) 489-491 single-quotes paths; Windows PowerShell 5.1 and 7.0 to 7.2 re-quote `'C:\Backup Folder\'` as `"C:\Backup Folder\"` for a native executable and the C runtime reads `\"` as an escaped quote. The cmd branch doubles trailing backslashes for exactly this reason; the PowerShell branch does not. (b) Line 755 builds a selector from a stored `mode`; a tampered or corrupt localStorage value throws uncaught in the click handler. Validate `mode` and `labels` as `command_shell` already is.
 
 ## A4. Improvements (not defects)
