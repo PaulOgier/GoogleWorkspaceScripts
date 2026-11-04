@@ -1271,6 +1271,22 @@ class TestPolicyChecks(PolicyTestCase):
         self.assertIn("minimum length is 8",
                       findings[0].evidence[0]["Problem"])
 
+    def test_baseline_rules_match_scubagoggles(self):
+        """AUD-33: rules that were looser than the rego they cite."""
+        self.write_policies([
+            ("drive_and_docs.external_sharing", "/",
+             {"accessCheckerSuggestions": "RECIPIENTS_OR_AUDIENCE",
+              "externalSharingMode": "ALLOWLISTED_DOMAINS",
+              "allowNonGoogleInvitesInAllowlistedDomains": True}),
+            ("workspace_marketplace.apps_access_options", "/",
+             {"accessLevel": "ALLOW_LISTED_APPS",
+              "allowAllInternalApps": True})])
+        info = {f.fid: f for f in ts.check_policy_baseline(self.ctx)}[
+            "policy-baseline-info"]
+        refs = sorted(r["CISA baseline"] for r in info.evidence)
+        self.assertEqual(["GWS.COMMONCONTROLS.11.1", "GWS.DRIVEDOCS.1.4",
+                          "GWS.DRIVEDOCS.1.6"], refs)
+
     def test_strong_long_policy_clean(self):
         self.write_policies([("security.password", "/",
                               {"minimumLength": 14, "allowedStrength": "STRONG",

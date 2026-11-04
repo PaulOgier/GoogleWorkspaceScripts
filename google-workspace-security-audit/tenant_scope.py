@@ -4687,6 +4687,13 @@ POLICY_BASELINE = [
      lambda v, s: v == "ALLOW_ALL", "MEDIUM",
      "Users can install any Google Workspace Marketplace app",
      "GWS.COMMONCONTROLS.11.1"),
+    # ScubaGoggles also fails an allowlist (or none) that still lets every
+    # internal app in.
+    ("workspace_marketplace.apps_access_options", "allowAllInternalApps",
+     lambda v, s: v is True
+     and s.get("accessLevel") in ("ALLOW_LISTED_APPS", "ALLOW_NONE"),
+     "INFO", "Every app built inside the organisation can be installed, "
+     "outside the Marketplace allowlist", "GWS.COMMONCONTROLS.11.1"),
     ("security.less_secure_apps", "allowLessSecureApps",
      lambda v, s: v is True, "MEDIUM",
      "Less secure apps (password-only sign-in) are allowed",
@@ -4699,6 +4706,11 @@ POLICY_BASELINE = [
      lambda v, s: v == "RECIPIENTS_OR_AUDIENCE_OR_PUBLIC", "MEDIUM",
      "Drive suggests making a file public when sharing it",
      "GWS.DRIVEDOCS.1.6"),
+    # The rego passes only RECIPIENTS_ONLY.
+    ("drive_and_docs.external_sharing", "accessCheckerSuggestions",
+     lambda v, s: v == "RECIPIENTS_OR_AUDIENCE", "INFO",
+     "Drive suggests sharing a file with a target audience, not only its "
+     "recipients", "GWS.DRIVEDOCS.1.6"),
     ("drive_and_docs.general_access_default", "defaultFileAccess",
      lambda v, s: str(v).startswith("PRIMARY_AUDIENCE"), "MEDIUM",
      "New files are open to the whole organisation by default",
@@ -4719,6 +4731,12 @@ POLICY_BASELINE = [
      lambda v, s: v is True and s.get("externalSharingMode") == "ALLOWED",
      "INFO", "Files can be shared with people who have no Google account",
      "GWS.DRIVEDOCS.1.4"),
+    ("drive_and_docs.external_sharing",
+     "allowNonGoogleInvitesInAllowlistedDomains",
+     lambda v, s: v is True
+     and s.get("externalSharingMode") == "ALLOWLISTED_DOMAINS",
+     "INFO", "Files can be shared with people in allowlisted domains who "
+     "have no Google account", "GWS.DRIVEDOCS.1.4"),
     ("drive_and_docs.file_security_update", "securityUpdate",
      lambda v, s: v != "APPLY_TO_IMPACTED_FILES"
      or s.get("allowUsersToManageUpdate") is not False, "INFO",
@@ -4909,8 +4927,8 @@ def check_2sv_policy(ctx: RunContext) -> List[Finding]:
             "2sv-policy-map", "INFO",
             "2-step verification policy by organisational unit",
             "The tenant's 2-step verification policy settings as the API "
-            "reports them, per organisational unit. Rows only appear where "
-            "a policy is set.",
+            "reports them, per organisational unit. Rows at the root "
+            "include Google's defaults for settings the API leaves out.",
             "No action needed; check the enforcement rows match what the "
             "Admin console shows.",
             map_rows, "policies.csv"))
