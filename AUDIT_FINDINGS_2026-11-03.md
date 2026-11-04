@@ -505,7 +505,7 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 - CONFIRMED against the GAM 7.48.20 source (`doBatch` reads one command per physical line with `shlex.split(line)`); coordinator reproduced. `_logical_lines` 988 gives `gambatch` a `\` continuation, so a `.txt` with `gam print users \` followed by `gam delete user bob@example.com` prints READ-ONLY while GAM runs both lines.
 - Fix: no continuation character for `gambatch`.
 
-### CHK-08 `[ ]` Wrapper-function detection stops at the first `}` and ignores subshell bodies
+### CHK-08 `[x]` Wrapper-function detection stops at the first `}` and ignores subshell bodies
 - CONFIRMED (coordinator reproduced). 1499: the regex body `[^}]*` ends at the `}` of `${1}` or `${GAM:-gam}`, so the function is not registered, while its `gam "$@"` line is still skipped at 1356 as "the body of a wrapper function". Call sites are then never checked:
   ```
   g() {
@@ -516,7 +516,7 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
   ```
 - Fix: match braces with nesting, accept `( ... )` bodies, and never skip a `gam "$@"` line whose enclosing function was not registered.
 
-### CHK-09 `[ ]` Alias chains and aliases with arguments are lost
+### CHK-09 `[x]` Alias chains and aliases with arguments are lost
 - CONFIRMED (coordinator reproduced). 1492-1494 resolves one level with empty wrapper sets and drops the alias's own words after the first. `alias g7="gam"; alias zap="g7 delete"; g7 info domain; zap user bob@example.com` prints READ-ONLY; `alias zap="gam delete"; zap user bob@example.com` gives CANNOT TELL "incomplete gam command".
 - Fix: resolve aliases iteratively and keep the alias's trailing words as a prefix to the call's arguments.
 

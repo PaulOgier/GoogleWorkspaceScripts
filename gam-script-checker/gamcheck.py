@@ -295,8 +295,8 @@ LOCAL_RULES = [
     (UNKNOWN, r'(?:^|[\s;&|(])eval\s', 'runs text built at runtime as a command'),
 ]
 # sh -c "$(curl ...)", bash <(curl ...), source <(wget ...): downloaded code run without a pipe
-DOWNLOAD_RUN = re.compile(r'(?i)(?:\b(?:ba|z|da|k)?sh\b(?:\s+-\w+)*\s+-c\s+["\']?\$\(\s*(?:curl|wget)\b'
-                          r'|(?:\b(?:ba|z|da|k)?sh|\bsource|(?:^|[\s;&|])\.)\s+<\(\s*(?:curl|wget)\b)')
+DOWNLOAD_RUN = re.compile(r'(?i)(?:\b(?:(?:ba|z|da|k)?sh|python3?|perl|ruby)\b(?:\s+-\w+)*\s+-c\s+["\']?(?:\$\(|`)\s*(?:\S*/)?(?:curl|wget)\b'
+                          r'|(?:\b(?:ba|z|da|k)?sh|\bsource|(?:^|[\s;&|])\.)\s+(?:<\s*)?<\(\s*(?:\S*/)?(?:curl|wget)\b)')
 # Programs that run text piped into them as code: printf "gam delete ..." | bash
 PIPE_RUNNERS = {'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'pwsh', 'powershell', 'cmd', 'python', 'python3', 'py',
                 'perl', 'ruby'}
@@ -951,6 +951,13 @@ class Context:
                             note='check that file too: gamcheck.py ' + script_tok)]
         if self.depth >= 3:
             return [Finding(self.file, line, UNKNOWN, f'scripts nested too deeply at {p.name}', command)]
+        try:
+            with open(p, 'rb') as fh:
+                binary = b'\0' in fh.read(8192)
+        except OSError:
+            binary = True
+        if binary:
+            return [Finding(self.file, line, UNKNOWN, f'runs {p.name}, a program file rather than a script', command)]
         at = next((i for i, t in enumerate(seg) if t.strip('`"\'') == script_tok), None)
         argv = [t for t in seg[at + 1:]] if at is not None else None
         inner = self.checker.check_file(p, depth=self.depth + 1, argv=argv)
@@ -981,10 +988,11 @@ def _gam_name(tok, gam_vars, wrappers):
     raw = str(tok).strip('`"\'')
     if raw in wrappers:
         return True
-    var = re.fullmatch(r'\$\{?([A-Za-z_]\w*)\}?|%([A-Za-z_]\w*)%|\$env:([A-Za-z_]\w*)', raw)
+    var = re.fullmatch(r'\$\{?([A-Za-z_]\w*)(?::?[-=]([^}]*))?\}?|%([A-Za-z_]\w*)%|\$env:([A-Za-z_]\w*)', raw)
     if var:
-        name = (var.group(1) or var.group(2) or var.group(3)).lower()
-        return name in gam_vars or 'gam' in name
+        name = (var.group(1) or var.group(3) or var.group(4)).lower()
+        default = var.group(2)  # ${GAM:-gam}: gam unless GAM is set
+        return name in gam_vars or 'gam' in name or (default is not None and _gam_name(default, gam_vars, wrappers))
     base = re.split(r'[\\/]', raw)[-1].lower()
     base = re.sub(r'^(?:%~[a-z]*\d|%\w+%)+', '', base)  # %~dp0gam.exe: gam next to the batch file
     if base.endswith('.exe'):
@@ -1019,7 +1027,7 @@ def _strip_comment(line, lang, quote=''):
     if lang == 'gambatch':
         return ('' if line.lstrip().startswith('#') else line), ''
     esc = '`' if lang == 'powershell' else '\\'
-    depth, i = 0, 0
+    carried, depth, i = bool(quote), 0, 0  # a line that starts inside a carried quote never loses a comment
     while i < len(line):
         c = line[i]
         if lang == 'powershell':
@@ -1042,7 +1050,7 @@ def _strip_comment(line, lang, quote=''):
             depth += 1
         elif c == ')' and depth:
             depth -= 1
-        elif c == '#' and not depth and (i == 0 or line[i - 1] in ' \t;&|()'):
+        elif c == '#' and not depth and not carried and (i == 0 or line[i - 1] in ' \t;&|()'):
             return line[:i], ''
         i += 1
     return line, quote
@@ -1057,9 +1065,20 @@ def _logical_lines(text, lang):
     if lang == 'powershell':
         text = re.sub(r'<#.*?#>', lambda m: '\n' * m.group(0).count('\n'), text, flags=re.S)
     cont = {'shell': '\\', 'gambatch': None, 'powershell': '`', 'batch': '^'}[lang]
-    out, buf, start, quote = [], '', None, ''
+    out, buf, start, quote, heredoc = [], '', None, '', None
     for n, raw in enumerate(text.splitlines(), 1):
-        raw, quote = _strip_comment(raw, lang, quote)
+        if heredoc:
+            # a heredoc or here-string body: read line by line, and an apostrophe in it opens no quote
+            word, tabs = heredoc
+            if (raw.lstrip('\t') if tabs else raw) == word or (lang == 'powershell' and raw.lstrip().startswith(word)):
+                heredoc = None
+            raw, quote = _strip_comment(raw, lang)[0], ''
+        else:
+            raw, quote = _strip_comment(raw, lang, quote)
+            m = (re.search(r'<<(-?)\s*([\'"]?)([A-Za-z_][\w.-]*)\2', raw.replace('<<<', '   ')) if lang == 'shell' else
+                 re.search(r'@([\'"])\s*$', raw) if lang == 'powershell' else None)
+            if m:
+                heredoc, quote = ((m.group(3), m.group(1) == '-') if lang == 'shell' else (m.group(1) + '@', False)), ''
         stripped = raw.rstrip()
         if start is None:
             start = n
@@ -1074,15 +1093,42 @@ def _logical_lines(text, lang):
     return out
 
 
+def _ansi_c_quotes(line):
+    """Rewrite each unquoted $'...' (where \\' escapes the quote) as a plain single-quoted word shlex can read.
+
+    Only outside other quotes: "$'" inside double quotes is literal text, and rewriting it would
+    turn the commands after it into a string. A quote inside becomes '\\'' so nothing is lost.
+    """
+    out, quote, i = [], '', 0
+    while i < len(line):
+        c = line[i]
+        if c == '\\' and quote != "'":
+            out.append(line[i:i + 2])
+            i += 2
+            continue
+        if not quote and line.startswith("$'", i):
+            j, word = i + 2, []
+            while j < len(line) and line[j] != "'":
+                word.append(line[j + 1] if line[j] == '\\' and j + 1 < len(line) else line[j])
+                j += 2 if line[j] == '\\' else 1
+            out.append("'" + ''.join(word).replace("'", "'\\''") + "'")
+            i = j + 1
+            continue
+        if c in '\'"' and quote in ('', c):
+            quote = '' if quote else c
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
 def _tokenise(line, lang):
     """Split a line into words and shell punctuation; unbalanced quotes fall back to whitespace."""
     posix = lang in ('shell', 'gambatch')
     # shlex splits 2>&1 into 2, >&, 1 and the redirect is dropped later, so a
     # file-descriptor number glued to > or < is removed first; else "2" reads as an argument
     line = FD_REDIRECT.sub(r'\1', line)
-    if lang == 'shell':
-        # shlex does not know $'...' (it\'s escapes the quote); hand it a plain single-quoted word
-        line = re.sub(r"\$'((?:[^'\\]|\\.)*)'", lambda m: "'" + re.sub(r'\\(.)', r'\1', m.group(1)).replace("'", '') + "'", line)
+    if lang == 'shell' and "$'" in line:
+        line = _ansi_c_quotes(line)
     try:
         lex = shlex.shlex(line, posix=posix, punctuation_chars=';&|()<>')
         lex.whitespace_split = True
@@ -1379,7 +1425,7 @@ class Checker:
 
     def _shell_like(self, text, lang, ctx, argv=None):
         lines = _logical_lines(text, lang)
-        gam_vars, wrappers = self._shell_aliases(lines, lang)
+        gam_vars, wrappers, wrapper_lines = self._shell_aliases(lines, lang)
         findings, code_lines = [], []
         dead, mode_note = _mode_scope(lines, argv) if argv is not None else (set(), '')
         if mode_note:
@@ -1432,8 +1478,11 @@ class Checker:
                                                 short(seg), note=f'if {var} holds gam, check the command with gam written out'))
                     local_text.extend([' '.join(seg), sep])
                     continue
-                args = [_dynamic(t, lang) for t in seg[at + 1:]]
-                if args and all(isinstance(t, Dyn) for t in args) and any(t.startswith(('$@', '"$@', '$*', '@args', '%*')) for t in args):
+                if n in wrapper_lines and len(seg) == 1 and sep.startswith('('):
+                    continue  # g() { ... }: the definition's own name, not a call
+                args = [_dynamic(t, lang) for t in wrappers.get(seg[at].strip('`"\''), []) + seg[at + 1:]]
+                if (n in wrapper_lines and args and all(isinstance(t, Dyn) for t in args)
+                        and any(t.startswith(('$@', '"$@', '$*', '@args', '%*')) for t in args)):
                     continue  # the body of a wrapper function; its callers are checked instead
                 findings.extend(self.gam.parse(args, ctx, n))
             findings.extend(self._local(' '.join(t for t in local_text if t), ctx, n))
@@ -1515,25 +1564,36 @@ class Checker:
         if re.split(r'[\\/]', word)[-1].lower().removesuffix('.exe') not in SCRIPT_RUNNERS:
             return None
         args = [t.strip('`"\'') for t in seg[k + 1:]]
-        if any(t.lower() in ('-m', '-c') or _ps_inline(t) for t in args):
-            return None
+        runner = re.split(r'[\\/]', word)[-1].lower().removesuffix('.exe')
+        if any(t.lower() in ('-m', '-c') or (runner in ('pwsh', 'powershell') and _ps_inline(t)) for t in args):
+            return None  # bash -e x.sh still runs x.sh: the PowerShell switches count only for PowerShell
         names = [t for t in args if not t.startswith(('-', 'http://', 'https://'))]
         return next((t for t in names if t.lower().endswith(SCRIPT_EXTS)), names[0] if names else None)
 
     @staticmethod
     def _piped_shell(seg, before):
-        """The shell or interpreter a pipe feeds as code (... | bash, | sudo sh -s, | python3 -), or None."""
+        """The shell or interpreter a pipe feeds as code (... | bash, | sudo -u x sh -s, | python3 -), or None.
+
+        After a prefix word (sudo, env, timeout) the runner can sit behind its options, so any
+        later word naming a runner counts. -s and - mean the code comes from the pipe whatever follows.
+        """
         if before not in ('|', '|&'):
             return None
         k = 0
-        while k < len(seg) and (re.fullmatch(r'[A-Za-z_]\w*=.*', seg[k]) or
-                                (seg[k].lower() in PREFIX_WORDS and seg[k].lower() not in PIPE_RUNNERS)):
+        while k < len(seg) and re.fullmatch(r'[A-Za-z_]\w*=.*', seg[k]):
             k += 1
+        name = lambda t: re.split(r'[\\/]', t.strip('`"\''))[-1].lower().removesuffix('.exe')
+        if k < len(seg) and name(seg[k]) not in PIPE_RUNNERS:
+            if seg[k].lower() not in PREFIX_WORDS:
+                return None
+            k = next((j for j in range(k + 1, len(seg)) if name(seg[j]) in PIPE_RUNNERS), len(seg))
         if k >= len(seg):
             return None
-        word = re.split(r'[\\/]', seg[k].strip('`"\''))[-1].lower().removesuffix('.exe')
+        word = name(seg[k])
         args = [t.strip('`"\'') for t in seg[k + 1:]]
-        if word not in PIPE_RUNNERS or any(t.lower() in ('-c', '/c') or _ps_inline(t) for t in args):
+        if any(t in ('-s', '-') for t in args):
+            return word
+        if any(t.lower() in ('-c', '/c') or (word in ('pwsh', 'powershell') and _ps_inline(t)) for t in args):
             return None
         if any(not t.startswith('-') for t in args):
             return None  # a script file was named; _script_path follows it
@@ -1602,8 +1662,13 @@ class Checker:
 
     @staticmethod
     def _shell_aliases(lines, lang):
-        """Find variables holding gam's path and wrapper functions that pass their arguments to gam."""
-        gam_vars, wrappers = set(), set()
+        """Find variables holding gam's path, aliases and wrapper functions that run gam, and the wrapper bodies' lines.
+
+        wrappers maps each name to the words it puts in front of the caller's arguments
+        (alias zap="g7 delete" -> ['delete']); aliases are resolved through chains. A function
+        body is found by matching its braces or parentheses, so ${1} and ${GAM:-gam} do not end it.
+        """
+        gam_vars, wrappers, aliases, body_lines = set(), {}, {}, set()
         assign = {
             'shell': r'^\s*(?:export\s+|local\s+|readonly\s+)?([A-Za-z_]\w*)=(.+)$',
             'gambatch': r'^\s*(?:export\s+)?([A-Za-z_]\w*)=(.+)$',
@@ -1615,21 +1680,34 @@ class Checker:
             words = m.group(2).strip().strip('"\'').split() if m else []  # X=" " leaves no word
             if m and (_gam_name(words[0] if words else '', set(), set()) or GAM_LOOKUP.search(m.group(2))):
                 gam_vars.add(m.group(1).lower())
-            m = re.match(r'^\s*alias\s+([\w-]+)=[\'"]?(\S+)', line)
-            if m and _gam_name(m.group(2).strip('"\''), set(), set()):
-                wrappers.add(m.group(1))
+            for m in re.finditer(r'(?:^|[;&|]\s*)alias\s+([\w-]+)=(?:\'([^\']*)\'|"([^"]*)"|([^\s;&|]+))', line):
+                aliases[m.group(1)] = (m.group(2) or m.group(3) or m.group(4) or '').split()
             m = re.match(r'(?i)^\s*Set-Alias\s+(?:-Name\s+)?([\w-]+)\s+(?:-Value\s+)?(\S+)', line)
-            if m and _gam_name(m.group(2).strip('"\''), set(), set()):
-                wrappers.add(m.group(1))
+            if m:
+                aliases[m.group(1)] = [m.group(2).strip('"\'')]
+        for name in aliases:
+            words, seen = list(aliases[name]), {name}
+            while words and words[0] in aliases and words[0] not in seen:  # alias zap="g7 delete", alias g7=gam
+                seen.add(words[0])
+                words = aliases[words[0]] + words[1:]
+            if words and _gam_name(words[0], gam_vars, set()):
+                wrappers[name] = words[1:]
         text = '\n'.join(line for _, line in lines)
-        for m in re.finditer(r'(?im)^\s*(?:function\s+)?([A-Za-z_][\w-]*)\s*(?:\(\s*\))?\s*\{([^}]*)\}', text):
-            name, body = m.group(1), m.group(2)
+        for m in re.finditer(r'(?im)^\s*(?:function\s+)?([A-Za-z_][\w-]*)\s*(?:\(\s*\))?\s*([{(])', text):
+            name, opener = m.group(1), m.group(2)
             if name.lower() == 'function':
                 continue
+            closer, depth, j = '}' if opener == '{' else ')', 1, m.end()
+            while j < len(text) and depth:
+                depth += (text[j] == opener) - (text[j] == closer)
+                j += 1
+            body = text[m.end():j - 1]
             has_gam = any(_gam_name(t.strip('&"\'`'), gam_vars, set()) for t in re.split(r'[\s;]+', body))
             if has_gam and re.search(r'\$@|\$\*|@args|\$args', body):
-                wrappers.add(name)
-        return gam_vars, wrappers
+                wrappers[name] = []
+                first = text.count('\n', 0, m.start())
+                body_lines.update(lines[k][0] for k in range(first, first + text.count('\n', m.start(), j) + 1))
+        return gam_vars, wrappers, body_lines
 
     def _local(self, text, ctx, line, fallback=None, fallback_what=''):
         """Apply the local-damage rules to non-gam text; the first rule per level wins."""

