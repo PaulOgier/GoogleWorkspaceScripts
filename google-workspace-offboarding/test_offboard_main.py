@@ -582,6 +582,25 @@ class TestTemporaryUnsuspend(MainFlowCase):
         self.assertTrue(any("which is suspended" in p and "--unsuspend" in p
                             for p in printed), printed)
 
+    def test_unverified_unsuspend_reissues_suspension_and_says_so(self):
+        """OFF-04: the read said still suspended, so the old abort trusted it
+        and sent nothing; a late-landing unsuspend then left it ACTIVE."""
+        gam = ScriptedGam(suspended=True)
+
+        def slow_update(args):
+            # 'Updated', but the flip is not visible within the poll.
+            return True, "Updated"
+        gam.rule(("update", "user", LEAVER, "suspended"), slow_update)
+        with mock.patch.object(offb.time, "time", side_effect=[i * 10.0 for i in range(10000)]):
+            code = self.run_main(gam, "--doit", "--force", "--unsuspend", "--no-transfer",
+                                 "--user", LEAVER)
+        self.assertEqual(code, 2)
+        self.assert_subsequence([f"update user {LEAVER} suspended off",
+                                 f"update user {LEAVER} suspended on"], gam.argv())
+        self.assertFalse(any("password random" in a for a in gam.argv()))
+        self.assertTrue(any("not verified" in e for e in offb.summary_errors),
+                        offb.summary_errors)
+
     def test_failed_resuspend_is_not_reported_as_resuspended(self):
         gam = ScriptedGam(suspended=True)
 

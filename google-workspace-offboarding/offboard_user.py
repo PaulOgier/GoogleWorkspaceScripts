@@ -1816,8 +1816,13 @@ def wait_for_suspended(email: str, expected: bool, timeout: int = 60,
 no_suspend_contract_waived = False
 
 
-def restore_original_suspension(email: str, attempts: int = 3) -> bool:
+def restore_original_suspension(email: str, attempts: int = 3,
+                                always_issue: bool = False) -> bool:
     """Re-suspend an account this run temporarily unsuspended.
+
+    `always_issue` sends `suspended on` even when a read already says
+    suspended: after an unsuspend that never read back, that read may predate
+    an unsuspend still propagating (OFF-04), and the write is idempotent.
 
     Registered with atexit once the temporary unsuspend is verified, so the
     account is restored on EVERY exit path — a preflight abort, an unhandled
@@ -1831,7 +1836,7 @@ def restore_original_suspension(email: str, attempts: int = 3) -> bool:
     # Ctrl+C, and a gam call that refuses to run once shutdown_requested is
     # set would turn the guard into 90 seconds of sleeping followed by a
     # false EMERGENCY, with the account still active.
-    if read_suspended(email, bypass_shutdown=True) is True:
+    if not always_issue and read_suspended(email, bypass_shutdown=True) is True:
         return True
 
     print_warning(f"Restoring original suspended state for {email} before exit...")
@@ -5271,8 +5276,11 @@ def main():
                     "Could not verify that the user was unsuspended. Restoring "
                     "the original state and aborting before any offboarding change."
                 )
+                summary_error(f"Temporary unsuspend of {user_email} not verified; "
+                              f"aborted before any offboarding change")
                 if not dry_run:
-                    restore_original_suspension(user_email)
+                    restore_original_suspension(user_email, always_issue=True)
+                finish_run(dry_run)
                 sys.exit(2)
 
     # GYB can open the leaver's mailbox only while the account is active, so
