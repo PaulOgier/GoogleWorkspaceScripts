@@ -1,0 +1,601 @@
+# GoogleWorkspaceScripts audit: findings and fix plan
+
+Date: 3 November 2026. Repository state: commit `b16ad9d` (GAM Script Checker v0.4.6, Offboarding v5.7.2, Security Audit v1.7.2). No code was changed during the audit; this document is the only file added.
+
+## How to use this document
+
+Every finding has an ID, a severity, a confidence label, the exact location, what happens, why it matters, how it was verified or how to reproduce it, a suggested fix, and a test to add. Work through them in a new session, one at a time, and interrogate each claim before changing anything: the reproduction notes are there so that each one can be re-run first.
+
+Confidence labels:
+
+- **CONFIRMED**: reproduced by running code against the script, or follows from unambiguous code reading that was double-checked by a second reader.
+- **PLAUSIBLE**: the code path is real, but the trigger depends on Google or GAM behaviour that could not be exercised offline (no `gam`, `gyb` or `rclone` binary and no tenant in the audit environment). Verify on the dev tenant before fixing.
+
+Severity is about consequence to an operator or client, not about how hard the fix is:
+
+- **High**: wrong tenant state, lost data or a client-facing report that is wrong, under conditions that will occur in normal use.
+- **Medium**: a documented promise that the code does not keep, a misleading result an operator would act on, or a safety gap with a narrower trigger.
+- **Low**: edge cases, misleading output with no wrong action, docs drift, test hygiene.
+
+Status boxes: `[ ]` open, `[x]` done, `[-]` rejected after interrogation (write the reason next to it).
+
+## Method
+
+- Every script was read in full, line by line, by eight parallel reviewers plus a coordinating reviewer, each with a bounded range and instructions to verify before reporting and to drop anything the tests or another code path already handled.
+- Claims about GAM7 behaviour were checked against the current GAM7 source (`src/gam/__init__.py`, `gamlib/glcfg.py`) and the official `gam-install.sh`, fetched during the audit. Claims about the CISA SCuBA baseline were checked against the ScubaGoggles rego and defaults. Google's own Policy API pages were not reachable from the audit environment, so those are marked where it matters.
+- All shipped test suites were run on Python 3.11, 3.12 and 3.13. A syntax and library sweep was run against each tool's stated Python floor (3.8 for offboarding and the CSV splitters, 3.9 for the audit and the checker, 3.6 for the GYB and mbox tools).
+- Reviewers' scratch reproductions live outside the repository under the session scratchpad; the reproduction steps below are self-contained.
+
+## Baseline
+
+| Suite | Command the README gives | Result |
+| --- | --- | --- |
+| Offboarding unit | `python3 test_offboard_user.py` | 214 tests, OK (3.11, 3.12, 3.13) |
+| Offboarding integration | `python3 test_offboard_main.py` | 29 tests, OK |
+| Offboarding command builder | `npm test` (jsdom) | 7/7 OK |
+| Security audit | `python3 test_tenant_scope.py` | **259 tests run, OK; 35 more exist and never run this way** (see AUD-T01) |
+| Security audit via unittest | `python3 -m unittest test_tenant_scope` | 294 tests, OK |
+| GAM Script Checker | `python developers/test_gamcheck.py` and the blind runner | OK; 177/187 blind cases, 0 under-warned, 5 documented over-warnings |
+| GYB tools | `python3 test_gyb_tools.py` | **1 failure** when run as root or on Windows (GYB-T01); all other tests pass |
+| Mbox tools | `python3 test_vault_export_tools.py` | all checks passed |
+| GAM7 update | `./test-gam-update.sh` | 4/4 OK |
+
+## Priority list (start here)
+
+These are the items most likely to bite in real use, across all tools, in suggested order.
+
+1. AUD-01 Empty internal-domain list turns every internal share and forward into an external finding.
+2. AUD-02 A check that raises this month marks last month's findings from it as Resolved.
+3. AUD-03 Licence waste reads seat counts that GAM7 only prints for four legacy SKUs, then reports "Checked and clean" everywhere else.
+4. AUD-04 Group-targeted policies are merged into one bucket and shown as the root OU.
+5. AUD-05 A failed organizer-grant removal followed by one Ctrl+C is never recorded.
+6. AUD-06 Orphaned Shared Drive check misses drives whose only manager is suspended.
+7. OFF-01 Ctrl+C between an alias delete and its re-create destroys the alias.
+8. OFF-02 GYB access probe runs against a suspended leaver before the temporary unsuspend, so `--unsuspend` with any mailbox work cannot start.
+9. OFF-03 Interrupted run exits 0 with no trace in the summary; later phases blame the destination.
+10. AUD-T01 Thirty-five audit tests never run under the documented command.
+11. UPD-01 Updater installs into `<parent>/gam7` whatever `-d` says, then verifies the old binary.
+12. AUD-07 Evidence IDs collide, so the month-to-month diff is blind for most multi-row findings.
+13. GYB-01 and GYB-02 Backup doctor misreads paths with `#`/`?`/`%` and can be fooled by a stray `.eml`.
+14. CSV-01 Calendar filter silently drops UTC events on Python 3.8 to 3.10.
+
+---
+
+# A. Google Workspace Offboarding (`google-workspace-offboarding/`)
+
+Files: `offboard_user.py` (5528 lines), `offboarding_command_builder.html`, `test_offboard_user.py`, `test_offboard_main.py`, `test_command_builder.js`, `README.md`.
+
+No Critical finding. No path was found that suspends or deletes anyone other than the named user, that deletes without the snapshot and kill switch, or that writes in dry run. The scorched-earth gates (`--doit`, `--force`, typed address, Shared Drive check before the kill switch) hold. Phase order matches the README and suspension is genuinely last on every branch.
+
+## A1. High
+
+### OFF-01 `[ ]` Ctrl+C between an alias delete and its re-create destroys the alias
+- Severity High. CONFIRMED (reproduced with a stub; loop re-read by the coordinator).
+- Where: `offboard_user.py:2936-2952` (`transfer_aliases`).
+- What happens: the loop runs `delete alias` (line 2936), then `create alias ... user <destination>` without `bypass_shutdown=True`. `run_gam` (line 993) refuses every non-bypass call once `shutdown_requested` is set. A Ctrl+C that lands after the delete makes the create return "Shutdown requested", the retry loop breaks on `shutdown_requested`, and the alias is gone. The error printed is loud and names the manual command, but the tenant is worse off than before the run on an interrupt the script says it handles gracefully. A second alias in the list is also reported as "will bounce until recreated" although it was never deleted.
+- Why it matters: this is the one place the script deliberately destroys something before recreating it. The kill switch protects its own seven steps with `bypass_shutdown=True` and a comment explaining why; this pair has no such protection.
+- Reproduce: stub `run_gam` so that the first `delete alias` call sets `shutdown_requested = True` and returns success; call `transfer_aliases("l@x", "s@x", dry_run=False)` and observe the create is refused.
+- Fix: once a delete has succeeded, run the create and its retry loop with `bypass_shutdown=True`; check `shutdown_requested` only before starting the next alias.
+- Test: the stub scenario above, asserting the create is issued and the alias lands in `moved`.
+
+### OFF-02 `[ ]` GYB access probe and mailbox-size estimate run against a suspended leaver before the temporary unsuspend
+- Severity High. PLAUSIBLE for the trigger (Google refusing service-account impersonation of a suspended user, which is its documented behaviour), CONFIRMED for the ordering.
+- Where: `check_dependencies` runs `gyb --email <leaver> --action quota --service-account` at `offboard_user.py:1318-1328`, and `_estimate_mailbox_bytes` (`gam user X show drivesettings`, line 3233) at line 1360. `main()` calls `check_dependencies` at line 5092; the `update user ... suspended off` is at line 5190.
+- What happens: `need_gyb` is True whenever `--no-email` is absent, or `--backup-email` or `--reuse-email-backup` is set. For a suspended leaver the quota probe fails, `check_dependencies` prints "GYB service account cannot access <leaver>" with a domain-wide-delegation diagnosis and `main()` exits 2 before the unsuspend ever runs. The README's own example `python3 offboard_user.py --doit --unsuspend --user leaver@yourdomain.com` is this path. The disk-space preflight is also skipped silently for the same reason.
+- Why it matters: `--unsuspend` cannot be used for a mailbox migration at all, with a misleading diagnosis. The live test plan only covers `--unsuspend --no-transfer` (where `need_gyb` is False) and the integration suite fakes `subprocess.run` for the quota probe (`test_offboard_main.py:210-212`), so neither layer sees it.
+- Also affected: restore-only mode (`--reuse-email-backup`) probes GYB access to the source mailbox it never reads (lines 5086-5090). The leaver is normally suspended by then and `--reuse-email-backup` refuses `--unsuspend` (lines 4971-4977), so a resume may be refused with no way round short of unsuspending by hand.
+- Verify first: on the dev tenant, run `gyb --email <suspended user> --action quota --service-account` and record the exact failure.
+- Fix: move the GYB probe (and the size estimate) after the temporary unsuspend when `--unsuspend` is set, or probe the destination mailbox for restore-only mode, and distinguish "account suspended" from "DWD not granted" in the message.
+- Test: `check_dependencies` with `need_gyb=True` against a suspended leaver plus `--unsuspend`, with the quota probe stubbed to fail only while suspended.
+
+### OFF-03 `[ ]` An interrupted run exits 0 with no trace in the summary, and later phases blame the destination
+- Severity High (two reviewers found it independently). CONFIRMED (reproduced through the repository's own `MainFlowCase` harness).
+- Where: `signal_handler` (708-716) records nothing; `_abort_if_shutdown` (5035-5038) calls `finish_run`, which returns `exit_code` untouched. `_abort_if_shutdown` runs before the transfer block and after calendar only; nothing sits between Drive, Shared Drive check, email, alias and calendar (5405-5420).
+- What happens: (a) `--doit --force --user L --all-transfer-to S` with the flag set during group listing ends with exit 0, empty `summary_errors` and `summary_warnings`, no `suspended on`, no licence removed, no transfers; the kill switch has scrambled the password so the account is contained but not suspended, and a scheduler reading the README's "0 = success" marks it done. A SIGTERM from a job timeout is the realistic trigger. `test_ctrl_c_during_kill_switch_still_completes_containment` asserts `code == 0`, so the README contract and the test disagree. (b) A Ctrl+C during the Drive transfer terminates GAM, then `migrate_email` validates the destination through `run_gam`, gets `(False, "Shutdown requested")` and records "Destination user not found: successor@" and "Email migration skipped: destination invalid"; alias transfer reports every alias FAILED and bouncing though none was touched; the Shared Drive check reports "inconclusive". The ticket log then states that a valid successor was not found. (c) On the scorched-earth path, `delete_user` after a Ctrl+C prints "CRITICAL: Deletion FAILED ... still exists" instead of "cancelled" (5355, 4537-4542).
+- Fix: in `_abort_if_shutdown` record `summary_warning("Run interrupted after <phase>")` and set a non-zero exit code (document which); check `shutdown_requested` between every transfer phase (or have each phase return early with a `summary_skip("skipped: shutdown requested")` when the flag is already set); make `delete_user` say "cancelled" when the refusal is the shutdown flag.
+- Test: the harness scenario with the flag set mid-transfer, asserting the summary names the interruption and names no false destination error; update the pinned exit-code test deliberately.
+
+## A2. Medium
+
+### OFF-04 `[ ]` "Unsuspend not verified" abort path can leave a started-suspended account active
+- Severity Medium. PLAUSIBLE (needs the propagation lag the script has itself observed); logic CONFIRMED.
+- Where: `restore_original_suspension` (1808-1815) returns True without issuing `suspended on` when a read says the account is still suspended; the abort branch in `main()` (5214-5220) calls it but no atexit guard is registered on that path (the `atexit.register` is only reached in the verified branch at 5212); the branch also `sys.exit(2)` without `finish_run`, so the restore outcome never reaches the summary or log footer.
+- What happens: `update user X suspended off` returns success but `wait_for_suspended(user_email, False)` (60 s) does not see the flip. The script's own notes record an unsuspend whose `Updated` reply took over 70 s to take effect (4588-4590) and a flip that read back after 54 s (1824-1827). If the unsuspend lands after the 60 s poll and after the guard's single read, the account ends ACTIVE, the log says "Restoring the original state and aborting", exit code 2. The same race exists if Ctrl+C is pressed during the 60 s poll.
+- Fix: in that branch always issue `suspended on` (idempotent) rather than trusting one read, or register the atexit guard before issuing the unsuspend; route the exit through `finish_run`.
+- Test: `restore_original_suspension` with a read that says suspended followed by a flip; the "Could not verify" branch is currently untested.
+
+### OFF-05 `[ ]` A corrected interactive destination typo still exits 1
+- Severity Medium. CONFIRMED (reproduced).
+- Where: `validate_destination` (1600-1602) calls `summary_error` before `_plan_email` (1875-1878) re-asks; `exit_code` is never lowered.
+- What happens: answering `jon@` then `good@` gives the right plan but `summary_errors == ['Destination not found: jon@...']` and exit 1, which the README defines as "errors in one or more phases".
+- Fix: have `validate_destination` report the miss without recording a summary error when called from an interactive re-ask (pass a flag, or record the error only after the final answer).
+- Test: assert `exit_code == 0` and empty `summary_errors` after a corrected typo.
+
+### OFF-06 `[ ]` `--reuse-email-backup` never reconciles the backup against disk
+- Severity Medium. CONFIRMED by code reading.
+- Where: `migrate_email` 3609-3619 only checks that `msg-db.sqlite` exists; the normal path calls `verify_backup_complete()` and refuses a short backup.
+- What happens: a backup whose DB lists more messages than are on disk (antivirus that deletes rather than locks, a partial copy to another machine, a hand-trimmed folder) restores short; `to_send` (3782) is the on-disk count so the summary says "N restored of N on disk". GYB skips absent files with a warning and exits 0. README: "A backup that comes up short against GYB's own message database fails the run."
+- Fix: call `verify_backup_complete(backup_path)` in the reuse branch with the same early return.
+- Test: a reuse folder with one DB row missing on disk; assert refusal.
+
+### OFF-07 `[ ]` "Devices found and listed for review" lists nothing
+- Severity Medium. CONFIRMED (reproduced).
+- Where: `manage_devices` 2451-2484 uses `capture_output=True`, so `run_gam` returns the CSV without logging it (1021-1022); the function only counts lines. The snapshot (2119-2125) does not capture devices either.
+- What happens: the `resourceId`/`deviceId` needed for the printed `gam update mobile <resourceId> ...` commands never reach the console or the log. README: "Mobile and ChromeOS devices are listed for review and action."
+- Fix: `logger.info(output)` when devices are found, or add the device CSVs to the snapshot JSON.
+
+### OFF-08 `[ ]` A failed or short Drive backup does not stop the Drive transfer
+- Severity Medium. Behaviour CONFIRMED; whether it is a defect or a design choice is for the owner to decide.
+- Where: `run_phase("Drive backup (rclone)", ..., hold=transfer_failures)` at 5370-5371, then `transfer("drive", ...)` unconditionally at 5405; hold text at 5450-5463.
+- What happens: rclone reports `Duplicate object found in source`, the backup phase records an error and joins `transfer_failures`, the Drive transfer then moves everything to the successor. The end-of-run text says "Licences RETAINED so the failed transfer can be retried" and "Rename them in Drive and re-run", but after `transfer drive` the leaver owns nothing, so re-running rclone against the leaver can never complete the archive. No data is lost.
+- Fix: when `--backup-drive` was requested and the backup is in `transfer_failures`, either skip the Drive transfer (and say so) or change the hold wording to say the data is at the successor and the archive must be re-run there.
+
+### OFF-09 `[ ]` Command builder emits combinations the script rejects, and rejects one it accepts
+- Severity Medium. CONFIRMED (jsdom probes; the coordinator verified the emitting lines and the parser checks).
+- (a) `--unsuspend` (builder line 683) together with `--no-suspend` (in `SKIP_FLAGS`, line 464) is emitted with Copy enabled and "Ready, command is valid"; `parse_args` refuses the pair (4989-4993).
+- (b) `--restore-batch-size 1` is emitted (builder only shows a note, 581-586); `parse_args` refuses 1 (4921-4926). The README (`1 to 100`) and the argparse help (`1-100`) also still say 1 is allowed.
+- (c) Restore-only with `--force` (which the builder itself demands for restore-only) and `--email-to` plus `--reuse-email-backup` gives four "no destination resolves for the Drive/Alias/Calendar/Forward phase" errors and a disabled Copy button, because the `PHASE_DEST` loop (619-631) has no restore-only exclusion; the script only needs `--email-to` or `--all-transfer-to`.
+- (d) The `--forward-alias-to` help (361-362) says the script sends a summary notice to that address; the script sends no email, it prints Admin console steps (`print_mail_capture_instructions`, 4677).
+- (e) `test_command_builder.js` checks one flag only (`--allow-orphaned-shared-drives`); all of the above pass it.
+- Fix: add the `--unsuspend`/`--no-suspend` exclusion, raise the batch-size minimum to 2 everywhere (builder, README, argparse help), skip the `PHASE_DEST` loop in restore-only mode, correct the help text, and extend the jsdom test with one assertion per rejected combination and one per shell for quoting.
+
+## A3. Low
+
+### OFF-10 `[ ]` Log file contains ANSI colour codes on interactive runs
+- CONFIRMED. `_emit` (831-840) embeds `Colours.*` codes in the message and the `FileHandler` (776-783) receives the same record; colours are stripped only when stdout is not a TTY. The audit's `tenant_scope.py` already has a `_PlainFormatter` that strips them; copy it.
+
+### OFF-11 `[ ]` `_stream_process` reads in 256-character blocks, not as lines appear
+- CONFIRMED (measured 2.5 s delay). `proc.stdout.read(256)` at 1078 blocks until 256 characters or EOF, so short GYB/rclone lines are logged late. Use `read1`/`os.read` on the raw buffer, or `readline` with `\r` handling.
+
+### OFF-12 `[ ]` Snapshot Gmail reads on a mailbox-less (Cloud Identity) leaver are recorded as errors
+- PLAUSIBLE. `preflight_snapshot` 2110-2116 issues `show delegates`, `show forward`, `show sendas` without `suppress_summary_error`; for a Gmail-off user these fail (exit 73 per the script's own note at 1548-1552), so a `--no-transfer` offboarding records three errors and exits 1 although everything applicable succeeded. `has_mailbox` is known in `main()` and already drops `popimap` for this case; use it for the snapshot too.
+
+### OFF-13 `[ ]` Dependency check misattributes a general gam failure to a missing OU
+- CONFIRMED by logic. 1265-1313: an `info domain` failure whose text lacks "oauth"/"unauthorized"/"credentials" (for example `invalid_grant: Token has been expired or revoked`) falls through to the OU probe, which also fails, and prints OU-creation remediation. Also `run_gam`'s `FileNotFoundError` and generic `Exception` branches (1052-1062) ignore `suppress_summary_error`, so "suppressed" probes can still add summary errors.
+
+### OFF-14 `[ ]` A failed alias read quietly weakens the self-transfer guard
+- CONFIRMED. `_list_aliases` (2880) returns `[]` on failure; `preflight_destinations` (1488-1490, 1870-1871) then only checks the literal address and continues. Apply the script's own rule that an unreadable list counts as unknown, not as absent.
+
+### OFF-15 `[ ]` Failed delegate query prints a green `[OK]`
+- CONFIRMED. `cleanup_delegates` 2652-2653: `print_success("No delegates found or unable to query.")` on a failed query; the summary error is recorded so the exit code is right, but the phase output is wrong. Branch on `success` and name the manual command as `remove_groups` does.
+
+### OFF-16 `[ ]` Forwarding verification uses a substring match
+- CONFIRMED. `setup_forwarding` 3891: `forward_to.lower() in status_line` lets `sam@x.com` be "verified" by an accepted `isam@x.com`; the following `forward on` fails with "Invalid forwarding address" and the diagnostic points away from the real cause (still pending). Parse `Forwarding Address: <addr>,` and compare equal.
+
+### OFF-17 `[ ]` `--backup-email` archive recorded as covered before the migration runs
+- CONFIRMED. 5383-5395 records "Email archive: covered by the migration's retained GYB backup" before `migrate_email`; if it returns early the summary still says archived. Record it inside `migrate_email` after `verify_backup_complete` passes.
+
+### OFF-18 `[ ]` Prompts can appear mid-run after the plan was confirmed
+- CONFIRMED. `_select_backup_path` (3481-3523) prompts "Found an existing ... backup ... sync into it?" from inside the Drive backup and the email migration when `--force` is absent, including in dry run (`backup_drive_rclone` calls it before its `dry_run` branch, 4333). `run_offboarding`'s docstring says the run is unattended after the plan. Decide the folder in `collect_plan` and echo it in the plan.
+
+### OFF-19 `[ ]` `has_mailbox` is read from a field the code elsewhere calls unreliable
+- PLAUSIBLE. `main()` 5129 reads "Mailbox is setup"; `_email_mailbox_missing`'s docstring (1551-1562) says that field stays False on licensed, restorable mailboxes. A False reading drops `popimap` from deprovision (2256-2258) and the log does not say POP/IMAP were left on. Mitigated by the password scramble, token revocation and suspension. At minimum log the omission.
+
+### OFF-20 `[ ]` `_gyb_db` creates an empty `msg-db.sqlite` where none exists
+- CONFIRMED (side effect), consequence latent. `_gyb_db` (2987) has no existence check; `count_undated_messages` and `_message_dates` can create a 0-byte DB, after which `_select_email_backup_path` treats the folder as a backup. `verify_backup_complete` and `_restored_count` guard; add the same guard to `_gyb_db`.
+
+### OFF-21 `[ ]` Duplicate-collision warning prints negative and zero counts
+- CONFIRMED (reproduced). `verify_drive_backup_complete` 4213-4219 and 4240-4244: with local leftovers from an earlier sync plus one rclone duplicate the output is "3 file(s) owned in Drive but 5 on disk (-2 missing)" and "short by 0 file(s)". Clamp at zero and word the padding case as the comment describes.
+
+### OFF-22 `[ ]` Unverified Drive reconciliation leaves no summary trace
+- CONFIRMED and pinned by `test_gam_failure_does_not_raise_or_warn`. 4188-4195: a failed or timed-out `print filelist` prints `[WARN]` and returns `(0, 0)` with no `summary_warning`, so "Drive backed up via rclone" reads as verified. Decide whether that is intended; if not, add the warning and change the test.
+
+### OFF-23 `[ ]` Flags silently ignored despite the README's "usage errors, not silent overrides"
+- CONFIRMED by probing `parse_args`. Accepted and ignored: `--reuse-email-backup` with `--no-suspend`, `--no-drive`, `--drive-to`, `--allow-orphaned-shared-drives`; `--scorched-earth` with `--forward-alias-to` (and the mail-capture block is never printed on the scorched path, 5356); `--no-transfer` with `--all-transfer-to`/`--drive-to`; `--allow-orphaned-shared-drives` without `--scorched-earth`. The comment at 4965-4968 says these should be usage errors.
+
+### OFF-24 `[ ]` Pre-logging failures surface as tracebacks
+- CONFIRMED by logic. `setup_logging` (771 `mkdir`, FileHandler open) is unguarded and `--user` from the command line bypasses `prompt_email`'s regex, so an unwritable `--log-dir` or a `--user` containing `:` `*` `?` gives a raw traceback. Also `--log-dir` is not `expanduser()`-ed (5059) while `--backup-dir` is; the builder quotes `'~/logs'`, so a directory literally named `~` is created.
+
+### OFF-25 `[ ]` Docs and exit-code drift
+- CONFIRMED (three reviewers). (a) README "Pre-flight snapshot" lists signature, Drive settings and devices; the JSON holds user info, groups, aliases, delegates, forwarding, send-as and licences (sendas carries the signature). (b) README says `--user` is prompted only without `--force`; `main()` 5053-5057 prompts regardless, so the epilog example `--doit --force --scorched-earth` blocks on a prompt and exits 2 with a closed stdin. (c) The admin-account hold exits 1 via `finish_run` (5120-5124, pinned by `test_admin_account_blocks_before_any_write`) while every other preflight refusal exits 2; README says 2 is "nothing or little ran". (d) `--restore-batch-size` docs say 1 is allowed (see OFF-09). (e) Builder banner says no Execute combination skips containment, but restore-only does; builder says restore-only "Needs --force", the script does not; README mentions a builder "domain" field that does not exist. (f) `check_for_updates()` is labelled "Non-blocking" at 5071 but is a synchronous 3 s `urlopen` on every run.
+
+### OFF-26 `[ ]` Builder: PowerShell trailing-backslash quoting and brittle profile load
+- PLAUSIBLE for (a), CONFIRMED for (b). (a) 489-491 single-quotes paths; Windows PowerShell 5.1 and 7.0 to 7.2 re-quote `'C:\Backup Folder\'` as `"C:\Backup Folder\"` for a native executable and the C runtime reads `\"` as an escaped quote. The cmd branch doubles trailing backslashes for exactly this reason; the PowerShell branch does not. (b) Line 755 builds a selector from a stored `mode`; a tampered or corrupt localStorage value throws uncaught in the click handler. Validate `mode` and `labels` as `command_shell` already is.
+
+## A4. Improvements (not defects)
+
+- `run_gam` (1004) does not pass `stdin=subprocess.DEVNULL`, unlike `run_gyb`; `run_gam_parallel` runs up to six gam processes sharing the terminal's stdin, so any gam prompt would hang to the timeout.
+- `validate_destination` (1576) checks `Account Suspended` but not `Is Archived`; an archived destination has no Gmail, so a GYB restore fails after the download.
+- `print_plan` (2014) omits group removal, delegate cleanup, licence removal, `--backup-drive`/`--backup-email` and `--scorched-earth`; the plan the operator confirms does not mention the licence removal.
+- `preflight_snapshot` reports "Snapshot saved" with empty data when every read failed (2118-2120); record `{"error": ...}` per failed read and treat zero successful reads as a phase failure.
+- `signal_handler` promises "force quit immediately" but the atexit re-suspend guard still runs for up to three minutes; say so.
+- `remove_groups` already has the `Role` column; flag sole `OWNER` rows the way sole-organiser drives are flagged.
+- `check_shared_drives` counts any other organizer ACL as safety; `permissions.N.deleted` is in the CSV, and a suspended other organizer is effectively no organizer.
+- Deprovision output is not logged on success (`capture_output=True`); `logger.info(output)` would make the log self-contained.
+- Compare the GYB backup against `show gmailprofile` `messagesTotal` to catch a backup that skipped messages with warnings and exited 0.
+- Reuse mode could top up with a resumed `gyb --action backup` before restoring.
+- `check_shared_drives` is read-only but skipped in dry run (3988), so the plan never shows an orphaned drive.
+- Double summary errors on restore failure (`check_restore_destination_ready` plus `migrate_email`; attempt 20 records two). Cosmetic.
+
+## A5. Verified OK (so the new session does not re-audit these)
+
+- GAM7 syntax of every command issued: `update user ... org/recoveryemail/recoveryphone/password random changepassword on/gal off/suspended on|off`, `user X deprovision [popimap] signout [turnoff2sv]`, `print mobile query email:`, `print cros query user:`, `user X print groups`/`delete groups`, `show delegates`/`delete delegate`, `info user` licence block and `delete license <sku>`, `transfer drive <dest> keepuser`, `print aliases user`, `delete alias`/`create alias <a> user <dest>`, `add calendaracls <cal> writer user:<dest>`, `add forwardingaddress`/`show forwardingaddresses`/`forward on <addr> keep`, `vacation on`, `delete user`, `print filelist fields id,mimetype query ...`, `print shareddrives`, `print drivefileacls`. GYB flags and the `<dest>-restored.sqlite`/`restored_messages`/`msg-db.sqlite` shapes match GYB.
+- Every parser runs correctly against every fixture in `fixtures/` (licence block with nested parentheses, `info user quick` keys for GAM 7.48.01, groups CSV, aliases header, delegates, header-only device output, forwardingaddresses accepted line, gmailprofile not enabled, drivesettings `329.85 TB`).
+- `run_gam` dry-run returns before spawning; `non_fatal_patterns`, `suppress_summary_error`, shutdown gating and `bypass_shutdown` behave as documented; `wait_for_suspended` is None-safe; the kill switch's seven steps all bypass shutdown; a failed containment overrides `--no-suspend`.
+- `preflight_destinations` runs after the skip flags are set, refuses the leaver and their aliases case-insensitively, accepts a group only for forwarding, and exits 2 before any write; `decide_unsuspend` matches the README (`--force` never implies `--unsuspend`).
+- Temporary unsuspend: destinations validated first, read-back verified, `finish_run` restores before the summary with atexit as fallback, `no_suspend_contract_waived` only on a normal `--no-suspend` completion.
+- Scorched earth requires `--doit` and `--force`, refuses every backup and transfer flag, re-types the primary address (alias resolved first), runs the Shared Drive gate before the kill switch, treats unreadable ACLs as blocking, keeps the snapshot.
+- Batch ladder descends and floors correctly; `next_restore_action` terminates (terminal refusal, three stalled attempts, 20-attempt ceiling); all retry loops are bounded; Windows `PermissionError` path regex resolves the right file.
+- Python 3.8: `ast.parse(feature_version=(3,8))` passes; no builtin generics in annotations, no `X | Y`, no `removeprefix`, no `match`, no `zoneinfo`; `shutil.move` gets `str()` paths; all subprocess and file I/O is explicit UTF-8.
+- A SIGINT during `input()` on a pty runs the handler and the prompt continues, so a prompt-time Ctrl+C does not traceback.
+- Builder: every emitted flag exists in `parse_args` with the same spelling; scorched mode emits only the accepted set; POSIX and cmd quoting are correct; `EMAIL_RE` excludes shell metacharacters; every DOM write uses `textContent`/`createElement`, so no XSS from form input; profiles never restore the scorched confirmation.
+
+---
+
+# B. Google Workspace Security Audit (`google-workspace-security-audit/`)
+
+Files: `tenant_scope.py` (6895 lines), `policy_defaults.json`, `test_tenant_scope.py`, `tenants.example.json`, `README.md`.
+
+No Critical finding. The read-only promise holds: the only write to a tenant is the documented temporary organizer grant in `collect_sd_external`, and the first Ctrl+C only sets a flag so the current drive's grant is still removed by the `finally`. HTML escaping is complete (an injection probe of `<script>alert(1)</script>'" onmouseover=x &` into every tenant-derived position produced zero raw occurrences in either report), the report contains no script, and `run_checks` isolates each check. The problems are in what the checks conclude and in a few interrupt and multi-tenant paths.
+
+## B1. High
+
+### AUD-01 `[ ]` An empty internal-domain list turns every internal forward, send-as, filter, group member, Shared Drive member and file share into an "outside the organisation" finding
+- Severity High. CONFIRMED (reproduced; the coordinator verified `collect()` and `preflight`).
+- Where: `internal = set(ctx.internal_domains)` followed by `email_domain(x) not in internal` with no empty-list guard at 2389 (external file shares), 2569 (forwarding), 2619 (Shared Drive external), 2760 (filter forwarding), 2832 (filter BEC), 3208 (at-risk accounts), 3374 (admin recovery), 3493 (send-as), 3523 (forwarding addresses), 3551 (group members). Only `check_classroom_outsiders` (4092) guards. `ctx.internal_domains` is populated only by `derive_internal_domains` (2111) after the `domains`/`domainaliases` modules run; the preflight parses `gam info domain` and stores `primary_domain` in the manifest (1275) but never seeds `internal_domains`; `collect()` (2191-2247) does not stop when `domains` fails; `domains` is not in `DELIVERY_CRITICAL_MODULES`, so the gate passes the report.
+- Triggers: (a) `--only forwards,sendas,delegates` on a fresh run directory (the README advertises `--only users,groups,dns`, and `scan_user_list` is written so a lone `--only sendas` works); (b) a full run where `print domains` errors (API hiccup, quota) while everything else succeeds.
+- Result: every mailbox forwarding to a colleague is CRITICAL "forwarding outside the organisation", every send-as alias MEDIUM external, every group member and Shared Drive member HIGH external, and the client receives it with "Ready to send".
+- Reproduce: build a `RunContext` with `internal_domains=[]`, `forwards.csv` row `u@example.com,True,team@example.com`; `check_external_forwarding` returns `external-forwarding` CRITICAL.
+- Fix (layered): seed `internal_domains` from the preflight's `primary_domain` so it is never empty after a successful preflight; make every "not in internal" check return `[]` plus a recorded gap (or an INFO "could not judge external sharing") when the list is empty; make `selected_modules` always include `domains` and `domainaliases`; consider adding `domains` to `DELIVERY_CRITICAL_MODULES`.
+- Test: every check above with `internal_domains == []`, asserting no external finding and a recorded gap.
+
+### AUD-02 `[ ]` A check that raises this run turns last run's findings from that check into "Resolved"
+- Severity High. CONFIRMED (reproduced, including the rendered Resolved list).
+- Where: `compare_with_previous` 6059-6067 with `run_checks` 5899-5910.
+- What happens: September's run had `ext-forwarding` CRITICAL (modules `forwards;users`). In October `check_external_forwarding` raises (bad row, GAM column change). `run_checks` records `ctx.check_errors` and emits only `check-error-check_external_forwarding`. Both runs have `forwards` and `users` as `ok`, so `comparable()` is True, `ext-forwarding` is not in `current_ids`, and it lands in `summary["resolved"]`. The client report prints it under "What changed" as resolved and the Critical tile reads "down from 1". `compare_with_previous` never consults `ctx.check_errors`, and `findings.csv` does not record which check produced a finding, so it cannot know the finding is missing because the check did not run. The delivery gate does hold the report and exits 2 ("checks did not run"), which is why this is High rather than Critical; the `audit_report.html` on disk is still wrong and the QA verdict does not explain why.
+- Related: a previous run's internal `check-error-*` INFO finding (empty modules column) is itself listed as Resolved in the client report once the check works again, because the Resolved list is not severity-filtered (6063-6065) while the New list is.
+- Fix: write the producing check name into `findings.csv` (one more column, like `modules`), and in `compare_with_previous` route a previous finding to `not_compared` when its check is in `ctx.check_errors`; as a blunt interim, mark every previous finding `not_compared` whenever `check_errors` is non-empty; filter internal findings out of the Resolved list.
+- Test: a check that raises when the previous run had findings from it; assert `not_compared`, not `resolved`.
+
+### AUD-03 `[ ]` Licence waste reads seat counts that GAM7 prints for only four legacy SKUs, then reports "Checked and clean" on every other tenant
+- Severity High. CONFIRMED against GAM7 source (`CUSTOMER_LICENSE_MAP`, `__init__.py` 16898-16906, verified by the coordinator).
+- Where: `parse_owned_licences` 5583-5596 matches `<name> Licenses: N` lines from `gam info domain`; `check_licence_waste` 5597-5605.
+- What happens: GAM's `_showCustomerLicenseInfo` prints only the customer usage report parameters: `G Suite Basic Licenses`, `Workspace Enterprise Plus Licenses`, `G Suite Business Licenses`, `Google Vault Licenses` (plus `... Users` lines). A Business Starter, Business Standard, Business Plus, Enterprise Standard, Frontline, Essentials or Education tenant owning 50 seats with 20 assigned produces no matching line, `owned` is empty, the check returns `[]`, and because it consulted `licenses` (status ok) `run_checks` puts "Licences owned but unassigned" in the client's "Checked and clean" table. The README promises "Licences owned but not assigned (licence waste) [Medium]" without qualification. `test_small_gap_clean` uses a `Business Starter Licenses: 10` line that GAM never emits, which is why the suite passes.
+- Secondary (PLAUSIBLE): `Google Vault Licenses: N` from bundled Vault on an Enterprise tenant has no per-user Vault SKU in `licenses.csv`, so Assigned is 0 and with N >= 5 a false "Paying for licences not assigned: Google Vault" row appears.
+- Fix: read owned seats from a source that covers every SKU (the Licensing API via `gam print licenses` counts, or the Reports customer usage `accounts:*_total_licenses` parameters where they exist), and never report "clean" when `owned` is empty: say in the finding and the README which editions the seat count covers. GAM also prints `... Users: N` (used seats) for the SKUs it does cover, which can replace the home-grown name matching for those.
+- Test: a Business Standard tenant fixture asserting the check is neither flagged nor "clean".
+
+### AUD-04 `[ ]` Group-targeted policies are merged into one bucket and reported as org unit "/"
+- Severity High. CONFIRMED against GAM7 source (`policyQuery.orgUnitPath` is set only when `policyQuery.orgUnit` is present, `__init__.py` 39101-39110, verified by the coordinator) and reproduced.
+- Where: `_parse_policy_settings` 4310: `ou = str(query.get("orgUnitPath", ""))`.
+- What happens: a group-targeted policy carries `policyQuery.groupEmail` instead, so every group policy of one setting type lands in the `(stype, "")` group, is Max-merged across unrelated groups, and every check prints it as `pol["ou"] or "/"`. Reproduced: root `allowEnrollment: true` (sortOrder 201), group contractors `allowEnrollment: false` (301), group execs `allowEnrollment: true` (302) resolved to two rows both labelled `/`, both `true`; the HIGH `2sv-enrolment-blocked` finding for the contractors group never appears. With the sortOrders swapped the block appears but attributed to "/", which a client reads as "nobody can enrol". Every policy check keys on `pol["ou"]` (baseline, password, session, Gmail protections, Takeout, Meet, sharing, service status).
+- Fix: key on `orgUnitPath` or `"group:" + groupEmail`, never merge across different targets, label the column "Org unit or group".
+- Test: a group-targeted policy fixture (none exists today).
+
+### AUD-05 `[ ]` A failed organizer-grant removal followed by one Ctrl+C is never recorded
+- Severity High. CONFIRMED (reproduced; loop re-read by the coordinator).
+- Where: `collect_sd_external`: `if shutdown_requested: return "error", len(rows), "interrupted"` at 1839-1841 sits above the only place `rows`, `unscanned` and `cleanup_failed` reach disk (1897-1905).
+- What happens: with `--grant-temp-access`, drive D1 has no listable member, the admin is granted organizer, the scan runs, `delete drivefileacl` fails (rc 1, `print_error` fires), the operator presses Ctrl+C once as the README invites ("Finishing the current module"). At the top of the next drive the function returns `("error", 0, "interrupted")`. `manifest.meta.temp_grant_cleanup_failed` is never written, `delivery_gate` and `exit_code` never see it, and `qa_report.html` says only that the module did not complete. The tenant carries an organizer grant the tool knows it failed to remove and does not report, which breaks the v1.7.2 promise that the QA report names the drive and the admin to remove. The scanned rows of earlier drives are discarded and a resume redoes them. A second Ctrl+C that lands while `delete drivefileacl` itself is running (`sys.exit(2)` in the handler) also records nothing. The `errors` counter (1763, incremented at 1856, 1870, 1876) is never read.
+- Fix: append to `ctx.manifest["meta"]["temp_grant_cleanup_failed"]` and `ctx.save()` inside the `finally` at the moment the removal fails; on the interrupted path still write the rows and the two meta lists before returning.
+- Test: Ctrl+C mid-module after a cleanup failure, asserting the manifest names the grant.
+
+### AUD-06 `[ ]` Orphaned Shared Drive check misses the common case: every manager suspended
+- Severity High. CONFIRMED for the suspended case by code reading; the group-only case is PLAUSIBLE.
+- Where: `check_orphaned_shared_drives` 2600: `if not col(row, "organizers"):`.
+- What happens: the CRITICAL finding fires only when GAM's `organizers` column is empty, i.e. the organizer accounts were deleted. The finding text says the cause is "typically because every manager has left the organisation", but leavers are normally suspended, not deleted, and a suspended user stays a Drive organizer and is still printed by `print shareddriveorganizers`. Such a drive appears only as INFO under `suspended-holding-data` ("manager of Shared Drive"). `shareddriveacls.csv` and `users.csv` (both collected every run) contain everything needed. Secondary: GAM7's `print shareddriveorganizers` defaults to `includetypes user`, so a drive managed only through a Google Group may print an empty `organizers` cell and be flagged CRITICAL "no manager" when it has one; confirm on a tenant.
+- Fix: derive orphan status from `shareddriveacls` (role organizer, not deleted, type user with an active non-archived account in `users.csv`, or type group), keep `shareddriveorganizers` as a cross-check, or at least add `includetypes user,group` to the module args.
+- Test: a fixture with a drive whose sole organizer is suspended.
+
+### AUD-07 `[ ]` Evidence IDs are keyed on a non-unique first column, so the month-to-month diff is blind for most multi-row findings
+- Severity High for the feature (two reviewers found it independently), CONFIRMED (reproduced).
+- Where: `_evidence_id` 2282-2296 uses the first evidence column of row 0 unless the finding passes `id_field`; only `filter-bec-patterns` (and two findings using `File ID`/`Client ID`) do.
+- What happens: two different public files both named "Untitled document" produce identical ids; one file shared with two external people produces two identical ids; a second external member of a Shared Drive (keyed on drive name), a second delegate on an admin mailbox (keyed on Mailbox), a second external group member (Group), a second outsider in a class (Course), a second forwarding filter or send-as for the same user, a second app password on an admin, three Gmail protections off at the same OU, two Takeout services at one OU, one user with three admin roles, all collapse into one id. In `compare_with_previous` (6052-6057) a newly public file with a common name is "persisting", a newly added external member is never "new", a fixed one never counts in `resolved_rows`. Affected ids include `public-files-*`, `anyone-link-*`, `external-domain-shares`, `external-inbound-shares`, `external-user-shares`, `sd-external-members`, `orphaned-shared-drives`, `sd-open-settings`, `sd-download-copy-open`, `delegates-on-admin-mailbox`, `groups-external-members-present`, `classroom-*`, `vault-exports`, `gmail-protections-off`, `meet-safety-open`, `takeout-enabled`, `sd-controls-open`, `2sv-policy-map`, `service-status`, `policy-settings-raw`, `policy-baseline`, `admin-role-map`.
+- Why it matters: the README sells "two runs can be diffed by who was named, not just by counts"; for Drive, group, delegation, Shared Drive and policy findings that promise does not hold. IDs are stable so nothing crashes; the diffs are simply blind. `TestCompareWithPrevious` only exercises a "User"-keyed finding.
+- Fix: pass `id_field` everywhere a stable key exists (`File ID`, `Drive ID`, `Client ID`), and for one-to-many findings add a hidden composite `Key` column (for example `file_id|shared_with`, `ou|setting`, `user|role`) and point `id_field` at it; or let `_evidence_id` hash the whole row when no `id_field` is given.
+- Test: an evidence-id uniqueness assertion over every finding a full fixture produces.
+
+## B2. Medium
+
+### AUD-08 `[ ]` A refused `--run-dir` still has the new tenant's data written into it
+- CONFIRMED (reproduced). `preflight` 1265-1283 writes `domaininfo.txt`, saves the preflight table into the manifest, and the log already carries the new tenant's identity lines, before the customer-ID comparison refuses the directory. A later `--render-only --run-dir <customer A's run>` then computes licence waste from customer B's seats against A's `licenses.csv` and prints B's domain in the appendix. This is the cross-customer mixing v1.7.2 set out to prevent. Fix: compare `saved`/`expected` before any write, and print rather than save the preflight table into a refused directory.
+
+### AUD-09 `[ ]` `--render-only --run-dir X --tenant Y` is accepted for another customer's run
+- CONFIRMED (reproduced; two reviewers). `run_tenant` 6798-6809: the customer-ID guard lives only in `preflight`, which `--render-only` skips, although `tenant["customer_id"]` and `manifest.meta.customer_id` are both already in hand. The report header shows Y's name over X's data, Y's break-glass accounts are excluded from X's dormancy findings, and `finish()` saves the manifest so X permanently carries Y's `tenant_name` and `break_glass`. Fix: one comparison before `finish()`.
+
+### AUD-10 `[ ]` `--all` cannot produce a deliverable report as documented, and `--admin` is one address for every tenant
+- CONFIRMED by logic (coordinator verified `RunContext.admin` at 1049 and the gate at 1738). `tenants.json` has no `admin` field (see `tenants.example.json`) and `run_tenant` never sets a per-tenant admin, so under `--all --yes --no-open` (the module docstring's own example) `collect_sd_external` returns `"skipped", 0, "--admin required for Shared Drive scans"`; `shareddrive_external` is in `DELIVERY_CRITICAL_MODULES`, so every tenant's `qa_report.html` says "Hold for review" and every tenant exits 2. Passing one `--admin` with `--all` makes every other tenant check DWD scopes and impersonate an account that does not exist there. Fix: optional `admin` per tenant entry, used when `--admin` is not given; warn when `--all` is combined with `--admin`.
+
+### AUD-11 `[ ]` `load_tenants` accepts shapes that break the hard stop or the break-glass exclusion, and crashes on others
+- CONFIRMED (reproduced). 6760-6779: `"customer_id": 123` (int) is accepted and then `customer != expected` compares a string with an int, so the wrong-tenant hard stop fires on every run of a correct tenant; `"break_glass": "bg@example.com"` (string) becomes `['b','g','@',...]`, so the break-glass account is reported dormant every month; `"enabled": "false"` (string) is truthy; a top-level array or a string entry raises `AttributeError` (main catches only `ConfigError`); a key such as `"a/../b"` is used verbatim as a path component. Fix: type-check `customer_id` (str), `break_glass` (list of str), `enabled` (bool), `gamcfgdir` (str), and reject keys with path separators.
+
+### AUD-12 `[ ]` Forced exit (second Ctrl+C or SIGTERM) exits 2, which the README defines as "complete but some modules could not run"
+- CONFIRMED (two reviewers; coordinator read the handler). `signal_handler` 449-456 `sys.exit(2)`; README promises 130 for a stopped run so a scheduler can tell complete from stopped. SIGTERM uses the same handler, so a supervisor's double SIGTERM reads as a finished audit with gaps. Also: Ctrl+C before the tenant loop under `--all` returns 0 (6871-6873), and an unknown `--only`/`--skip` key `sys.exit(2)` from `selected_modules` (1167-1170) after a run directory has been created, stopping every tenant under `--all`. Fix: 130 from the handler, `parser.error` for the key typo (validated in `parse_args` before any directory is made).
+
+### AUD-13 `[ ]` `manifest.json` is written in place, not atomically
+- PLAUSIBLE. `RunContext.save` 1085-1089 `write_text` directly; a forced exit, power cut or full disk mid-write yields "manifest.json unreadable; starting a fresh one", losing `customer_id` (so the other-customer refusal cannot fire for that directory) and `complete` (so the run drops out of `earlier_runs`) and re-collecting every module over the old CSVs. `_record`'s own docstring says "save() is not atomic". Fix: write to `manifest.json.tmp` and `os.replace`.
+
+### AUD-14 `[ ]` A tamingdns JSON-RPC error or MCP `isError` reply is scored as a passing DNS check
+- CONFIRMED (reproduced with a stubbed `urlopen`). `tamingdns_check` 1959-1967 returns `None` for `{"error": {...}}` and `{"raw": ...}` for `{"result": {"isError": true, ...}}`; neither carries an `"error"` key, so `_dns_domain`'s "every check failed, fall back to DoH" test is false, `collect_dns` marks the module `ok`, and `_dns_check_failed` returns False. A tenant with no DMARC whose DNS calls are rate limited is reported with no DNS finding and the DNS checks under "Checked and clean". Fix: treat `data.get("error")`, `result.get("isError")`, a `None` result and a `{"raw": ...}` result as `{"error": ...}`.
+
+### AUD-15 `[ ]` Preflight prints "all N required scopes PASS" when `check serviceaccount` tested nothing
+- CONFIRMED (reproduced). 1333-1352: `run_gam` returning rc 2 with `ERROR: Service Account: oauth2service.json, Does not exist` and no PASS/FAIL lines gives the preflight row "all 2 required scopes PASS" and an empty `failed_scopes`; each DWD module then fails at collect time and the appendix contradicts the module table. Fix: if `rc != 0` or `len(passed) + len(failed) < len(needed)`, record "NOT VERIFIED" with the stderr tail.
+
+### AUD-16 `[ ]` A UTF-8 BOM on a CSV header empties the audited user list
+- Effect CONFIRMED (reproduced); trigger PLAUSIBLE (gam.cfg `charset = utf-8-sig`, which GAM's docs suggest for Excel users, or a CSV re-saved by Excel in a resumed run directory). `read_csv_rows` 710-714 opens `utf-8`; `col()` 717-734 lowercases keys but `"﻿".strip()` is not empty, so `col(row, "primaryEmail")` returns `""`. `active_users` is empty, `scan_user_list` raises `LookupError`, every per-user module is skipped, "fewer than two super admins" fires. Fix: `encoding="utf-8-sig"` (and `errors="replace"`, as `csv_data_rows` already does) in `read_csv_rows`, `_strip_to_header` and the `csv.DictReader(io.StringIO(out))` sites, or strip `﻿` in `col()`.
+
+### AUD-17 `[ ]` Collectors are not wrapped; one exception ends the run with a traceback and no report
+- Structure CONFIRMED; triggers PLAUSIBLE. `_run_collector` 2160-2163 and `collect` 2222-2247: checks are wrapped (`run_checks`), collectors are not, and `run_tenant` in single-tenant mode has no handler. Realistic triggers: strict UTF-8 decode of a GAM-written redirect file, `OSError` from `write_rows` when the disk fills during a tier-3 scan (the preflight estimate is order-of-magnitude), `csv.Error` on a truncated file after a kill. In the light pool the exception surfaces from `fut.result()` and the remaining futures' results are never recorded. Fix: wrap the call and return `("error", 0, f"{type(exc).__name__}: {exc}")`.
+
+### AUD-18 `[ ]` `check_public_files` reports "Checked and clean" with up to 19 "anyone with the link" files present
+- CONFIRMED. 2367: below `ANYONE_LINK_SCALE` no finding of any severity is raised, and the check lands on the clean list under "Files public on the web or open to anyone with the link". Nineteen link-shared files, one of them the payroll sheet, read as clean. Fix: INFO finding listing link-shared files below the threshold (HIGH at or above), or reword the title.
+
+### AUD-19 `[ ]` `check_unmanaged_accounts` flags accepted and declined invitations as live personal accounts
+- CONFIRMED (logic). 2867-2871: every `userinvitations` row becomes HIGH regardless of `state`; the Cloud Identity states are NOT_YET_SENT, INVITED, ACCEPTED, DECLINED, and an ACCEPTED invitation is an account already converted. The test only uses NOT_YET_SENT. Fix: exclude ACCEPTED; consider listing DECLINED separately.
+
+### AUD-20 `[ ]` BEC filter heuristic misses `from:` in the query and fires on archive plus the word "account"
+- CONFIRMED (reproduced). `suspicious_filter` 2812-2817: `query from:attacker@outlook.com` plus trash is not flagged because the sender rule reads only the `from` column; `subject Your monthly account statement` plus archive plus label Bank is flagged HIGH "hides mail about 'account'", the routine newsletter-filing pattern the docstring says should be clean; `query label:account-updates` plus archive likewise. Fix: parse `from:` tokens out of the query and apply the sender rule to them; require trash or markread (not archive alone) for the weaker words (`account`, `statement`, `transfer`, `urgent`), keeping archive-alone for `invoice`, `payment`, `remittance`, `wire`, `proof of payment`.
+
+### AUD-21 `[ ]` Google's default password minimum (8) is never flagged because `policy_defaults.json` types it as a string
+- CONFIRMED (coordinator verified both files). `policy_defaults.json:185-192` has `"minimumLength": "8"`, `"maximumLength": "100"`, `"expirationDuration": "0"`; `check_password_policy` 4543-4545 requires `isinstance(minlen, int)`. With no `security.password` row in `policies.csv` the resolved root value is the string default and "minimum length is 8 characters" is never reported. `"0"` also does not match `_duration_seconds`'s `(\d+)s` (should be `"0s"`), harmless only because 0 is "never". On tenants where the API returns SYSTEM rows (the dev tenant did) the bug is masked. Fix: integers and `"0s"` in the defaults file; test a `security.password` fixture with no API row.
+
+### AUD-22 `[ ]` `policy_defaults.json` carries scrape artefacts and omissions
+- CONFIRMED for the artefacts; omissions PLAUSIBLE. Lines 214-237: eight `work_data_operation_type.*` entries with the field `"true": ""` (no Google setting has a field named `true`); they are appended as real settings at `/`. Line 200: `"enforcedFrom": "Unset"` is prose, not an API value (ScubaGoggles uses `1970-01-01T00:00:00Z`), and leaks into the `2sv-policy-map` INFO card. Lines 164-166: `gmail.spoofing_and_authentication` lacks `groupsSpoofingVisibilityType: "PRIVATE_GROUPS_ONLY"`, which ScubaGoggles includes as Google's default. Every other key/value compared matched ScubaGoggles' defaults.
+
+### AUD-23 `[ ]` The "Settings to check by hand" card contradicts the baseline finding in the same report
+- CONFIRMED (reproduced from one fixture). 4831-4901: the INFO card says the API does not expose settings that the same report now judges: automatic forwarding (GWS.GMAIL.11.1), invitations to non-Google accounts (DRIVEDOCS.1.4), general access default (DRIVEDOCS.1.8), Access Checker (DRIVEDOCS.1.6), group creation (GROUPS.2.1), plus external recipient warning, primary-calendar sharing and `externalSharingMode`; POP/IMAP exist as `gmail.imap_access`/`gmail.pop_access`. The list predates v1.7.0 ("checked 2026-09-14"). Fix: drop the rows now covered or reword to "judged above; confirm in the console".
+
+### AUD-24 `[ ]` DWD scope parsing splits on commas, but GAM joins multi-valued report parameters with spaces
+- PLAUSIBLE (GAM's `' '.join(item['multiValue'])` at 14911 is confirmed; whether `API_SCOPES` arrives as a multiValue could not be confirmed offline). `check_dwd_grants` 5405-5407: a grant of `https://mail.google.com/ https://www.googleapis.com/auth/drive` becomes one unmatched string, "Scopes: 1", "Broad access: none", INFO instead of MEDIUM, the exact grant the check exists for. Zero-cost fix: `re.split(r"[\s,]+", ...)` and a space-joined fixture in the test.
+
+### AUD-25 `[ ]` The printed PDF loses the header and every severity label
+- PLAUSIBLE (CSS unambiguous; depends on the browser's print-backgrounds setting, which is off by default in Chrome, Edge and Firefox). 6086-6091, 6102-6103, print block 6126-6131: `header.page` and `.sev` pills are white text on background colours; there is no `print-color-adjust: exact` and `@media print` does not recolour them, so the title, customer ID, dates, credit and every CRITICAL/HIGH/MEDIUM/INFO pill print white on white. The README says "Print it for a clean PDF" and the footer says "Print this page for a PDF copy." Fix: `print-color-adjust: exact; -webkit-print-color-adjust: exact;` on those elements, plus a dark-text fallback in `@media print`.
+
+### AUD-26 `[ ]` `open_report` can block indefinitely on a headless host with a console browser
+- PLAUSIBLE (stdlib mechanics confirmed from the 3.13 source). 6736-6753 `webbrowser.open`: with `DISPLAY` unset but `TERM` set, `webbrowser` registers `www-browser`, `links`, `elinks`, `lynx`, `w3m` if present and `GenericBrowser.open` waits on the process. A run started over ssh without `--no-open` opens the report in the terminal browser and waits for `q`, once per tenant under `--all`. Fix: skip opening when neither `DISPLAY` nor `WAYLAND_DISPLAY` is set on Linux, or open in a daemon thread.
+
+## B3. Low
+
+### AUD-27 `[ ]` Count-based findings run over a partial (timed-out) `users.csv`
+- CONFIRMED path, rare. `_module_usable` (2300) accepts `partial`; `run_gam` returns partial stdout on timeout and `collect_simple` keeps the rows, so `few-super-admins` CRITICAL, the 2SV percentage and `tenant-shape` can run over an incomplete user list. Mitigated by the delivery gate. Fix: require `ok`/`empty` for count-based findings, or add "(users module partial)" to the title.
+
+### AUD-28 `[ ]` `sd-open-settings` and `sd-download-copy-open` go silent when the restriction columns are absent
+- CONFIRMED behaviour, PLAUSIBLE trigger. 2662: a `shareddrives.csv` without `restrictions.*` columns yields no finding and the check lands on "Checked and clean"; a GAM field change would convert a HIGH finding into a silent clean.
+
+### AUD-29 `[ ]` `groups-no-owner` compares group addresses case-sensitively, and a partial `group_members` marks unreached groups ownerless
+- CONFIRMED logic (3545). GAM normally lower-cases, so this needs a mixed-case group to bite.
+
+### AUD-30 `[ ]` `_paid_licences` treats free Essentials Starter as paid
+- CONFIRMED (3026): "Google Workspace Essentials Starter" is returned as paid, so such accounts are reported as "still holding a paid licence" or "licensed account never signed into".
+
+### AUD-31 `[ ]` Shared Drive rows in the external-share findings cite `mydrive_external.csv` as source
+- CONFIRMED (2431, 2442); the "full list is in" footer points at a file that does not contain the row.
+
+### AUD-32 `[ ]` Passkey column may not exist in the usage report
+- PLAUSIBLE. 3882 reads `accounts:num_passkeys_enrolled` with `or "0"`; if the Reports API does not emit it (`accounts:num_security_keys` is known to exist), every admin without a hardware key is "0 passkeys" and `admins-not-phish-resistant` fires even for passkey-only admins. A missing column should read "not reported" and not count.
+
+### AUD-33 `[ ]` Baseline rules looser than the ScubaGoggles rule they cite
+- CONFIRMED against the rego. 4427-4429 GWS.DRIVEDOCS.1.6 flags only `RECIPIENTS_OR_AUDIENCE_OR_PUBLIC` (ScubaGoggles passes only `RECIPIENTS_ONLY`); 4450-4453 DRIVEDOCS.1.4 misses `ALLOWLISTED_DOMAINS` with `allowNonGoogleInvitesInAllowlistedDomains: true`; 4417-4420 COMMONCONTROLS.11.1 does not require `allowAllInternalApps` false. Also app rules are not gated on the service being enabled (ScubaGoggles gates them), and the `2sv-policy-map` copy "Rows only appear where a policy is set" (4636-4641) is wrong since defaults add root rows with no "Set by" column.
+
+### AUD-34 `[ ]` Mistyped `--compare-with` is accepted
+- CONFIRMED (reproduced). `find_previous_run` 6973-6978 and `parse_args` 6692-6695: a non-existent path gives a comparison against nothing ("up from 0", "What changed since typo_dir"). `parser.error` when the path is not a directory.
+
+### AUD-35 `[ ]` `--dry-run` still runs `gam oauth info` and `check serviceaccount`
+- CONFIRMED (1318, 1335). Both are reads, but the README says only `gam version` and `gam info domain` run.
+
+### AUD-36 `[ ]` Backup codes do pass through a file on disk, briefly
+- CONFIRMED. `run_gam` 645-649 sends every command's stdout to a `TemporaryFile`, including `print backupcodes`; the collector then keeps only the count. The README's "never reach disk" is stronger than the code. Pipe stdout for that one module or soften the wording.
+
+### AUD-37 `[ ]` Light-pass modules that finish after the first Ctrl+C are not recorded
+- CONFIRMED (2228-2235): after `break` the `with` block waits for running GAM processes but their results never reach `_record`, so they are re-run on resume. Collect the remaining futures before leaving the block.
+
+### AUD-38 `[ ]` Archived users are treated as listable Shared Drive members
+- CONFIRMED logic (1741-1742 builds `active` from `suspended != true` only); with three tries per drive a drive whose organizers are all archived goes UNSCANNED when an active writer exists. Exclude `archived` as `_live_users` does.
+
+### AUD-39 `[ ]` `listed()` treats any "Does not exist" in stderr as the member having no Drive
+- PLAUSIBLE (1776): a file deleted between the listing and the `select csvfile` call makes GAM print `Does not exist` for that ID; the whole drive is retried as the next member and finally "FAILED mid-scan". Scope the marker to the `User: <member>,` line as `_NO_SERVICE_RE` does.
+
+### AUD-40 `[ ]` Classroom module with zero rows and progress lines on stdout reads as partial
+- PLAUSIBLE (1540, 2069-2071): `print classroominvitations` writes "Course: X, Print 0 Classroom Invitations" lines to stdout ahead of the header; with exit 60 `is_header_only(out)` is False, so a healthy Education tenant exits 2.
+
+### AUD-41 `[ ]` A stale `shareddriveacls.csv` on resume can turn the temp grant into a membership removal
+- PLAUSIBLE (1861-1893): the "admin is already a direct member" case is excluded only via the previously collected ACL CSV. If the admin was added to the drive between collection and a resumed scan, the `finally` deletes the admin's real membership. Re-read the drive's ACL immediately before granting, or skip the delete when the add reports an existing permission.
+
+### AUD-42 `[ ]` Documentation drift
+- CONFIRMED. README says "283 tests", the docstring says 294, the documented run executes 259 (see AUD-T01). README lists two hold reasons for `qa_report.html`; `delivery_gate` (6519-6540) has four. README says a second Ctrl+C "kills everything" without saying the exit code is 2. README says "Accounts stacking multiple risk factors [High]" but the code is MEDIUM unless an admin is in the list (3249). README does not mention the startup fetch of `raw.githubusercontent.com` (the docstring does). A super admin without 2SV and dormant appears in three findings (admin-no-2sv CRITICAL, dormant-admin HIGH, at-risk HIGH); the code comment accepts this but the README's "one table per person" promise does not.
+
+## B4. Tests
+
+### AUD-T01 `[ ]` Thirty-five tests never run under the documented command
+- CONFIRMED by the coordinator. `if __name__ == "__main__": unittest.main(verbosity=2)` sits at line 2934 of the 3486-line `test_tenant_scope.py`. The 15 test classes defined after it (`TestCsvDataRows`, `TestScanSelectionEmpty`, `TestBatchedRedirectCounting`, `TestCollectDnsStatus`, `TestCollectOrdering`, `TestLicenceWasteGating`, `TestAtRiskRecoveryFactor`, `TestAtRiskAdminRecovery`, `TestSharedDriveScanAsMember` with 10 tests, `TestTempGrantCleanup` with 3, `TestTempGrantFailure` with 2, `TestResumeUnscannedSharedDrives`, `TestTier3Batched`, `TestParseArgsGuards`, `TestPlainLogFile`) are never loaded when the file is run as `python3 test_tenant_scope.py`, which is the command the README gives: "Ran 259 tests". `python3 -m unittest test_tenant_scope` runs all 294 and they pass, so nothing is currently broken, but the skipped set includes every test of the temporary organizer grant and its removal (the audit's only write path) and of the Shared Drive scan. The other three test files in the repository have their main block on the last lines. Fix: move the main block to the end; fix the README count; consider a CI job (see CI-02).
+
+### AUD-T02 `[ ]` Tests to add, in priority order
+- A check that raises when the previous run had findings from that check (AUD-02).
+- Every "not in internal" check with `internal_domains == []` (AUD-01).
+- A group-targeted policy fixture (AUD-04); a `security.password` fixture with no API row (AUD-21).
+- An evidence-id uniqueness assertion over every finding a full fixture produces (AUD-07).
+- Ctrl+C mid-module after a cleanup failure (AUD-05); what a refused run directory contains afterwards (AUD-08); `--render-only` with a mismatching tenant (AUD-09).
+- `load_tenants` with int, string and list type errors (AUD-11); `--compare-with` a missing directory (AUD-34); `parse_args` guards for `--tenant` with `--all` and `--all` with `--run-dir` (the guards exist at 6707-6712 but are untested).
+- tamingdns error shapes (AUD-14); `check serviceaccount` with no PASS/FAIL lines (AUD-15); BOM input (AUD-16); a collector that raises (AUD-17).
+- A Business Standard tenant for licence waste asserting neither flagged nor clean (AUD-03); a suspended-organizer drive (AUD-06); a space-joined `API_SCOPES` fixture (AUD-24); `check_public_files` over `shareddrive_external`.
+
+## B5. Improvements (not defects)
+
+- `delivery_gate` (6522-6526) only inspects modules present in the manifest, so `--skip-tier 3` or `--skip shareddrive_external` gives "Ready to send" with no Drive scan at all, while the same module failing would hold it. Hold, or name the omission in the QA verdict. `test_delivery_gate_and_exit_codes` codifies the present behaviour.
+- `exit_code` (6545-6548) treats a missing `complete` as True while `delivery_gate` treats it as False; pick one.
+- `--compare-with` may name another customer's run (`test_compare_with_flag_wins` asserts this); say so in the report or refuse unless customer IDs match.
+- `check_admin_roles`: roles assigned to a group are shown but their members are not counted for sprawl or checked for suspended holders; join `group_members.csv`.
+- `check_public_calendars` (3470) only looks at `scope.type == "default"`; a primary calendar shared to a named external user or domain is ignored although `calendaracls.csv` carries `scope.value`.
+- `check_group_exposure` does not read `whoCanViewMembership == ANYONE_CAN_VIEW`.
+- `sd-open-settings` (HIGH) fires on every drive left at Google's default `domainUsersOnly=False` even when the OU-level Drive sharing policy already blocks external sharing; cross-check with `check_sharing_policy` to cut noise on internal-only tenants.
+- `check_mailbox_delegation` marks a break-glass delegate "dormant"; reuse `_break_glass`.
+- `check_risky_oauth` splits scopes on whitespace only; a non-default `csv_output_field_delimiter` in gam.cfg would silently match nothing.
+- Refuse a `--run-dir` that holds no `manifest.json` unless it is empty; today `--run-dir .` turns any folder into a run directory and `earlier_runs` then scans its parent.
+- The Shared Drive scan holds each drive's full listing and ACL rows in memory (`listed()` returns `out` as one string); a redirect file per step would bound memory on very large drives.
+- When a drive's only active members are groups, expand them through `group_members.csv` before declaring UNSCANNED.
+- Add `adminaccess` explicitly to the top-level `print shareddriveacls` so the intent survives a GAM default change.
+- Comment the Merge-versus-Max semantics in `_parse_policy_settings`; in `check_2sv_methods` say "2SV is not enforced at all" before the device-trust details.
+
+## B6. Verified OK
+
+- GAM7 syntax of every `MODULES` entry and the column names each check reads via `col()` (users fields and `Licenses`/`LicensesDisplay`, admins/adminroles, groups and group-members fields, shareddrives/shareddriveacls `oneitemperrow`, shareddriveorganizers, mobile/cros, inbound SSO, datatransfers, userinvitations, vault objects, Classroom prints, `report customers/users`, `print policies formatjson` (`name,JSON`), tokens, `report admin|login|drive start -30d`, alerts filter, the tier-2 per-user prints, `forwardEnabled,forwardTo`, `delegateAddress`, `sendAsEmail/isPrimary/verificationStatus`, `forwardingEmail`, filter columns, `permission.*`, `scope.type`, `verificationCodesCount`, `accounts:*`). `col()` is case-insensitive. GAM7 expands `suspended` to include `suspensionReason`.
+- `external_pm_args`, the `csvfile <path>:primaryEmail` rewrite with absolute `redirect csv ... multiprocess`, `config auto_batch_min/num_threads`, and the backupcodes variant that strips the redirect and pins `auto_batch_min 0`.
+- `run_gam`: stdout to a temp file (no pipe fill, partial rows survive a kill), stderr read live on a daemon thread, `proc.wait()` after the kill, `_kill_tree` using `killpg` on POSIX and `taskkill /T` on Windows, `CREATE_NEW_PROCESS_GROUP`, every network and subprocess call bounded by a timeout, `FileNotFoundError` turned into an rc.
+- Signal handling: the first Ctrl+C only sets a flag; `collect_sd_external` checks it between drives, so a grant made in the current drive is always removed by the `finally` (except AUD-05's record of a failed removal).
+- `run_checks` isolates each check, records `check_errors`, surfaces an INFO finding, and does not swallow `KeyboardInterrupt`/`SystemExit`; only the four severities in `SEVERITY_ORDER` are ever constructed.
+- `posture_score` formula and floor; `earlier_runs`/`find_previous_run`/`score_trend` (same customer, `complete` required, current dir excluded, trend capped at six); `compare_with_previous` rules apart from AUD-02 and AUD-07.
+- HTML escaping of every tenant-derived value in both reports; DNS re-check href quoted; no `<script>`, `onclick` or `javascript:`; evidence tables capped at 10 rows with a note and `findings_evidence.csv` uncapped; `findings.csv` carries `change` and `modules`.
+- `delivery_gate` and `exit_code` agree with the README and the v1.7.2 commit for incomplete run, critical module error/partial/skipped, check errors, stale temporary grant, `n/a` modules, 130 on interruption (apart from AUD-12); `EXIT_PRIORITY` and the `--all` worst-code reduction are tested.
+- `parse_args` exclusions (`--render-only` needs `--run-dir`, `--grant-temp-access` needs `--admin`, `--tenant`/`--all` exclusive, `--all` rejects `--run-dir`/`--compare-with`); every flag in the README table exists and the reverse.
+- `run_tenant`/`main`: per-tenant run directories, `setup_logging(force=True)` resets handlers, `GAMCFGDIR` restored in `finally`, one tenant's exception caught and counted, `--list` and `--render-only` skip the update check, `--dry-run` returns before `complete`.
+- Policy engine: `sortOrder` resolution and per-OU separation, `rule.*` de-duplication, defaults only at root and only for missing fields, Education marketplace default, GMAIL 5.5/7.6 consequences, DRIVE/GROUPS/CALENDAR/CHAT/COMMONCONTROLS rule values versus the rego (apart from AUD-33), `_duration_seconds`, 30-day windows delegated to GAM, drive sharing log parsing, `_norm_sku` on distinct-SKU cases, `EDITION_FEATURES` SKU ids.
+- Date handling: `Never`, empty and the 1970 epoch stamp are all "never"; `fromisoformat` is always fed `.replace("Z", "+00:00")` so it works on 3.9; naive stamps get UTC; "now" is `datetime.now(timezone.utc)` everywhere.
+- Network disclosure matches the README: `www.googleapis.com` (HEAD), `tamingdns.com` (JSON-RPC carrying only the domain name and the DKIM selector), `dns.google`, `raw.githubusercontent.com` (VERSION); TLS verified; offline, gate 2 aborts cleanly.
+- Python 3.9: `ast.parse(feature_version=(3,9))` passes; `str.removeprefix`, `shutdown(cancel_futures=True)`, `basicConfig(force=True)` and `isoformat(timespec=)` are all 3.9; Windows console and `taskkill` handled; thread safety of manifest writes (only the main thread writes; `stderr_log` is locked).
+
+---
+
+# C. GAM Script Checker (`gam-script-checker/`)
+
+PENDING_CHECKER_SECTION
+
+---
+
+# D. GAM7 Update (`gam7-update/gam-update.sh`, `test-gam-update.sh`)
+
+Verified against the official installer fetched during the audit: `gam-install.sh` line 39 sets `target_folder="$target_dir/gam7"` whenever `-d` is given; getopts is `"hd:a:o:b:lp:u:r:v:s"`, so `-l` and `-p false` are valid. `gam version checkrc` sets exit code 1 only when a newer release exists (`setSysExitRC(1 if latest_version > current_version else 0)` in `doGAMCheckForUpdates`), and prints `Current:`/`Latest:` through `printKeyValueList`, so the script's parsing and its trust in exit codes 0 and 1 are sound.
+
+### UPD-01 `[ ]` `-d` only works when the directory is named `gam7`
+- Severity Medium. CONFIRMED against the installer.
+- Where: line 106 `bash "$installer" -l -p false -d "$(dirname "$GAMDIR")"`.
+- What happens: the installer always installs into `<target_dir>/gam7`. `-d /opt/gam7` works; `-d /opt/gam` (or any other basename) installs a fresh copy into `/opt/gam7`, after which lines 115-120 read the old binary at `/opt/gam`, print "WARNING: still not on the latest version after upgrading" and exit 1, leaving a second GAM install in a sibling folder. The README says "If you installed somewhere else, pass the same directory here with -d" without the constraint.
+- Fix: refuse (or warn and explain) when `basename "$GAMDIR"` is not `gam7`, or pass `-d "$GAMDIR" -s` (the installer's strip option installs directly into the target). Document it. Add a test case to `test-gam-update.sh`.
+
+### UPD-02 `[ ]` The rollback copy is taken before the installer download, so one transient failure poisons every later cron run
+- Severity Medium. CONFIRMED by ordering (lines 87-100).
+- What happens: `cp -a "$GAMDIR" "$backup"` runs, then `curl` fetches the installer. If curl fails (GitHub blip, proxy, DNS) `set -e` exits 1, leaving `<dir>.bak-<version>`; every later run then fails at "ERROR: <backup> already exists, move it first" until a human removes it. The temp installer file is also left behind because the `rm -f` at line 110 is never reached (no `trap`).
+- Fix: download (with `--retry 3 --max-time 120`) before copying; `trap 'rm -f "$installer"' EXIT`; consider removing the backup if the installer was never started.
+
+### UPD-03 `[ ]` A successful upgrade can exit non-zero because of the final `gam info domain`
+- Severity Low. CONFIRMED by `set -e` plus `pipefail`.
+- Where: line 129 `"$GAMDIR/gam" info domain 2>&1 | head -3` after the upgrade has been verified; also line 118 `gam version | head -1` (SIGPIPE 141 is possible under `pipefail` if gam writes after `head` exits).
+- What happens: in cron, an `info domain` that fails (expired token, API error) makes the script exit non-zero after a good upgrade, so the log reads as a failed upgrade. Fix: `|| true`, or capture the output and print it.
+
+### UPD-04 `[ ]` Small robustness items
+- No numeric cross-check of `Current` against `Latest`: GAM compares the two as strings (fine while components stay two-digit zero-padded); the script already parses both and could compare numerically. Low.
+- `-d ""` or `-d /` degenerate; an empty `$current` would produce a backup named `<dir>.bak-`. Guard with `[[ -n $current ]]`. Low.
+- No lock file; two overlapping cron runs would both copy and both run the installer. Low.
+- The awk filter that hides the installer's `removed ...` lines depends on English GNU rm messages and on `$GAMDIR` matching the spelling the installer prints (a relative `-d` will not be hidden). Cosmetic.
+- `test-gam-update.sh` covers only the pre-upgrade decision (by design); add a case for a `-d` whose basename is not `gam7` once UPD-01 is fixed.
+
+Verified OK: unknown exit codes and a missing `Latest:` line are both errors (the trap the header describes); dry run exits before any change; `cp -a` works on BSD and GNU; `-p false` leaves rc files alone; the four stub scenarios in the test reproduce GAM's real output and pass.
+
+---
+
+# E. GYB Gmail Backup Tools (`gyb-gmail-backup-tools/`)
+
+GYB's schema assumptions were checked: `settings(name,value)` with `db_version` 6, `messages(message_num, message_filename, message_internaldate)`, `labels`, and `<destination>-restored.sqlite` with `restored_messages` match GYB.
+
+### GYB-01 `[ ]` A backup path containing `#`, `?` or `%` makes the doctor report a healthy backup as a PROBLEM
+- Severity Medium. CONFIRMED (reproduced: exit 1 with "msg-db.sqlite is unreadable or has no settings table").
+- Where: `gyb_backup_doctor.py:36` `sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)`.
+- Why: in a SQLite URI `?` starts the query, `#` the fragment and `%` an escape, so the path is truncated or decoded wrongly. Backups are often under folders people name by hand.
+- Fix: `db_path.resolve().as_uri() + "?mode=ro"` (handles spaces, Windows drives and special characters) or `urllib.parse.quote`.
+
+### GYB-02 `[ ]` Count-based reconciliation can be fooled by a stray `.eml`
+- Severity Medium. CONFIRMED (reproduced: two DB rows, `b.eml` missing, `stray-copy.eml` present, verdict "Backup verified: every message in the DB is on disk", exit 0).
+- Where: line 169 `missing = rows - on_disk - quarantined`.
+- Why: the README claims "Reconciles the database against the disk". The DB holds `message_filename` for every row, so checking each named file exists is exact and no slower than `rglob`.
+- Fix: iterate `SELECT message_filename FROM messages` and test existence (and quarantine) per file; keep the count as a secondary line. Note the offboarding script has its own `verify_backup_complete`; consider sharing the approach.
+
+### GYB-03 `[ ]` Running the doctor on `.` from inside the backup misses the quarantine sibling
+- Severity Low. CONFIRMED (reproduced: same backup healthy by absolute path, "PROBLEM: 1 message(s) ... not quarantined" by `.`).
+- Where: line 152 `backup.parent / f"{backup.name}_quarantined"`; `Path(".").name` is `""`.
+- Fix: `backup = backup.resolve()` at the top of `doctor()`.
+
+### GYB-04 `[ ]` A `msg-db.sqlite` with a settings table but no `messages` table crashes with a traceback
+- Severity Low. CONFIRMED (reproduced: uncaught `sqlite3.OperationalError: no such table: messages` from line 146). `_table_count` returns -1 for a missing table but `rows == -1` is never checked, so even without the crash the branch at 183 would print "Backup verified" for -1 rows; `restored == -1` likewise prints "rows+1 remaining" (207).
+- Fix: guard the query and treat a missing `messages` table as a PROBLEM.
+
+### GYB-05 `[ ]` Housekeeping
+- SQLite connections are never closed (`with conn:` only commits); five `ResourceWarning: unclosed database` per test run under `-X dev`. Use `contextlib.closing`. Low.
+- The README example `gyb_backup_doctor.py /backups/mailboxes/*` also hits every `_quarantined` sibling, which reports "NOT A GYB BACKUP" and exit 2, so the overall exit code is 2 even when every backup is healthy. Recognise `*_quarantined` folders and skip them with a note. Low.
+- `backup.iterdir()` at line 101 can raise `PermissionError` uncaught. Low.
+
+### GYB-06 `[ ]` Header scanner: terminator search order and the empty-folder exit code
+- Low. CONFIRMED (reproduced): `read_header_block` (48-51) searches the whole buffer for `\r\n\r\n` before trying `\n\n`, so an LF-terminated header block followed by a CRLF blank line in the body returns the body up to that point as "headers" (41 bytes instead of 31 in the test). Harmless unless a body line looks like `Name: <40 000 bytes>`, which would be a false OVERSIZED. Take the minimum of the two positions.
+- Low: a folder with zero `.eml` files prints "No oversized headers. Nothing here will trip Gmail's header limit." and exits 0, which is more likely the wrong folder; the docstring's "nothing could be read at all" is exit 2. Warn, or exit 2 when `scanned == 0`.
+
+### GYB-T01 `[ ]` `test_unreadable_file_is_not_reported_as_clean` fails as root and on Windows
+- CONFIRMED (fails here on 3.11, 3.12 and 3.13 because the container runs as root; `chmod 0o000` does not block root, and on Windows `os.chmod` only toggles the read-only bit).
+- Fix: skip when `os.geteuid() == 0` or on `win32`, or make the file unreadable another way (a directory named `x.eml` raises `IsADirectoryError`, which the scanner also counts as UNREADABLE).
+
+Verified OK: `mode=ro` is honoured; chunk-boundary terminators are handled by re-joining; the 4 MB cap; unfolding counts leading whitespace as Google does; `OSError` per file; exit codes as documented; epoch-dated query relies on ISO text storage, which is what GYB's datetime adapter writes; Python 3.6 syntax.
+
+---
+
+# F. Mbox to EML (`mbox-to-eml/`)
+
+### MBX-01 `[ ]` An unescaped body line starting with `From ` splits a message in two
+- Severity Medium. CONFIRMED (reproduced: three files from two messages, one named `0000-00-00 0000 (no subject).eml` holding the tail of the body, counted as written, exit 0).
+- Why: the stdlib `mailbox.mbox` splits on any line starting with `From `. Takeout and Vault escape body lines as `>From`; Apple Mail and Thunderbird usually do; a hand-assembled or third-party mbox may not.
+- Fix: say in the README that the file must be mboxrd/mboxo-escaped, and have the splitter warn when a produced message has no `From:` or `Date:` header (a strong sign of a split), counting it separately from `written`.
+
+### MBX-02 `[ ]` "Bytes untouched" is true on macOS and Linux only
+- Severity Low. CONFIRMED from the stdlib source: `mailbox._mboxMMDF.get_bytes` ends with `string.replace(linesep, b'\n')` where `linesep = os.linesep`, so on Windows every CRLF becomes LF. A CRLF mbox split on Windows is rewritten with LF, which breaks S/MIME or DKIM verification of the `.eml`.
+- Fix: read the slice yourself from the message offsets, or document the Windows behaviour.
+
+### MBX-03 `[ ]` Re-running into a non-empty output folder duplicates every message
+- Severity Low. CONFIRMED (second run produced `name (2).eml` for all five). Refuse a non-empty folder, or document "use an empty folder".
+
+### MBX-04 `[ ]` Reconciler: label delimiter, Windows redirect encoding, surplus reporting
+- Low. CONFIRMED against GAM7 source: drafts are detected with `r["Labels"].split()`; GAM joins labels with `csv_output_field_delimiter`, default `' '` (`glcfg.py` 384), so this works by default but silently finds no drafts for an admin who set the delimiter to `,` or `;`. Split on `[\s,;]+` or document it.
+- Low: the README and docstring tell Windows users to shell-redirect `gam ... > gam-label-read.csv`; Windows PowerShell 5 writes UTF-16 and the script dies with a `UnicodeDecodeError` (caught as `ValueError`, exit 2, but with a confusing message). Recommend `gam redirect csv ./gam-label-read.csv user ...` as the CSV-splitter README already does, and open with `utf-8-sig`.
+- Low: when a key occurs n times in the mbox and n-1 in the GAM read, every mbox message with that key is printed as ONLY IN MBOX (the surplus is per key). Cosmetic.
+- Low: `date_stamp` uses the sender's own offset, so the folder's sort order mixes time zones. Cosmetic.
+
+Verified OK: `decode_header` handles `Header` objects from 8-bit subjects; `parsedate_to_datetime` failures caught on every version; `safe_name` cases match the tests; case-insensitive collisions are caught by `os.path.exists`; `create=False`; exit codes as documented; naive `Date` headers are handled identically on both sides of the diff; missing CSV columns exit 2; the Counter multiset logic is correct; Python 3.6 syntax.
+
+---
+
+# G. Split GAM Calendar CSV (`split-gam-calendar-csv/`)
+
+### CSV-01 `[ ]` The calendar filter silently drops UTC events on Python 3.8 to 3.10
+- Severity Medium. CONFIRMED by the Python documentation (`fromisoformat` accepts a trailing `Z` only from 3.11; before that it only parsed the formats `isoformat()` emits).
+- Where: `filter_and_split.py:39` `datetime.fromisoformat(start_datetime_str)`.
+- What happens: GAM prints `start.dateTime` as the Calendar API gives it; UTC events are `2026-07-01T07:00:00Z`. On the repository's stated floor (3.8+) every such event raises `ValueError`, is swallowed by `except (ValueError, TypeError): continue`, and nothing is printed about skipped rows.
+- Fix: `.replace("Z", "+00:00")` as `tenant_scope.py` already does, and print a count of rows skipped as unparseable.
+
+### CSV-02 `[ ]` All three scripts swallow every exception and exit 0
+- Severity Low. CONFIRMED by reading (`split_by_size.py:60-61`, `filter_and_split.py:75-76`, `split_csv.py:51-52`); file-not-found and missing-column paths also `return` with exit 0. A wrapper cannot tell success from failure. No exit codes are documented. Fix: `sys.exit(1)` on error.
+
+### CSV-03 `[ ]` Edge cases
+- An empty input file makes `reader.fieldnames` None, so `'primaryEmail' not in headers` raises `TypeError`, reported as "An unexpected error occurred: argument of type 'NoneType' is not iterable" (`split_csv.py:20`, `filter_and_split.py:26`). Low.
+- `encoding='utf-8'` misreads a BOM as part of the first header name (an Excel "CSV UTF-8" re-save adds one), so `primaryEmail` is "not found" though visibly present; `utf-8-sig` costs nothing. Low.
+- `split_by_size.py` accepts 0 or a negative size (one file per row); validate `> 0`. Output part files silently overwrite earlier ones in the working directory. Low.
+- Email local parts are case-preserved in file names, so `John@` and `john@` collide on Windows and macOS. Low.
+
+### CSV-04 `[ ]` Improvement: memory
+- `split_csv.py` and `filter_and_split.py` hold the whole file in memory as dicts; for the "hundreds of megabytes" exports the README describes that is several gigabytes of RAM on a laptop. Stream instead (one writer per user opened lazily, or two passes). `split_by_size.py` already streams correctly.
+- Style: no shebang or header comment (the contributing guideline asks for one), and no tests for these three scripts.
+
+---
+
+# H. CI, workflows and repository-wide
+
+### CI-01 `[ ]` `offboarding-tests.yml`
+- `pull_request.paths` omits the workflow file itself (the `push` trigger includes it). Low.
+- The `command-builder` job runs `npm install` with no `package-lock.json` tracked (`.gitignore` says "npm ci in CI only", but there is no lockfile to `ci` from), so a jsdom release can break CI unrelated to a change. Commit a lockfile and use `npm ci`. Low.
+- Python 3.13 is not in the matrix although users will have it. Low.
+
+### CI-02 `[ ]` Most test suites never run in CI
+- No workflow runs `test_tenant_scope.py` (294 tests), `test_gyb_tools.py`, `test_vault_export_tools.py` or `test-gam-update.sh`; the checker's suite runs only on release. A single "all tools" workflow on push would have caught AUD-T01 and GYB-T01. Run the audit suite with `python -m unittest` or after fixing AUD-T01.
+
+### CI-03 `[ ]` `gam-script-checker-release.yml`
+- Logic is sound: tag/version gate, tests and the blind runner, `git archive` from the tagged commit, hashes appended once. No change needed.
+
+### REPO-01 `[ ]` Layout and docs
+- The six old-name stub folders are intentional redirects; the two `VERSION` files kept there match the live versions (5.7.2 and 1.7.2). OK.
+- Python floors are consistent across READMEs (3.8+, 3.9+ for the audit and the checker, 3.6+ for the GYB and mbox tools).
+- The top-level README's test-count and feature claims should be revisited after the fixes above (audit test count, licence waste coverage, offboarding snapshot contents).
+
+---
+
+# Suggested order of work
+
+1. Safety and wrong-state items: OFF-01, OFF-02 (verify on the dev tenant first), OFF-03, OFF-04, AUD-05, AUD-08, AUD-09, AUD-11, UPD-01, UPD-02.
+2. Client-facing correctness in the audit: AUD-01, AUD-02, AUD-03, AUD-04, AUD-06, AUD-07, AUD-18 to AUD-24; then move the audit test main block (AUD-T01) and add the tests in AUD-T02 alongside each fix.
+3. Operator-facing correctness in offboarding: OFF-05 to OFF-09 and the builder test.
+4. Small tools: GYB-01, GYB-02, CSV-01, MBX-01, then the Low items in each.
+5. Docs sweep: every "Docs drift" item, the READMEs' test counts and exit codes, the command builder text.
+6. CI: CI-02 first, then CI-01.
+7. Improvements, as time allows.
