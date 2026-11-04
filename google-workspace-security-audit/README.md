@@ -88,7 +88,8 @@ the full module registry with keys and tiers.
 ### Google Drive external sharing and public files
 
 - Files **public on the web** [Critical]
-- "Anyone with the link" sharing at scale [High]
+- "Anyone with the link" sharing at scale [High]; fewer than 20 such files are
+  listed for review [Info]
 - Files shared with entire external domains [High]
 - Files shared to named external people [Medium]
 - Externally-owned files shared into the tenant [Info]

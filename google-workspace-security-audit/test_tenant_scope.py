@@ -284,12 +284,34 @@ u@example.com,f1,Plans.docx,application/vnd.google-apps.document,u@example.com,a
         ids = self.finding_ids(findings)
         self.assertIn("public-files-mydrive_external", ids)
 
-    def test_link_only_below_threshold_clean(self):
+    def test_link_only_below_threshold_is_info_not_clean(self):
+        """AUD-18: 19 link-shared files used to read as "checked and clean"."""
         rows = "\n".join(
             f"u@example.com,f{i},Doc{i},doc,u@example.com,anyoneWithLink,"
             f"anyone,reader,,,False" for i in range(3))
         self.write_csv("mydrive_external", f"{self.FILELIST_HEADER}\n{rows}")
+        findings = ts.check_public_files(self.ctx)
+        self.assertEqual(["anyone-link-mydrive_external"],
+                         self.finding_ids(findings))
+        self.assertEqual("INFO", findings[0].severity)
+        self.assertEqual(3, len(findings[0].evidence))
+
+    def test_no_anyone_rows_is_clean(self):
+        self.write_csv("mydrive_external", f"""{self.FILELIST_HEADER}
+u@example.com,f1,Plans.docx,doc,u@example.com,p1,user,reader,x@other.example,,""")
         self.assertEqual([], ts.check_public_files(self.ctx))
+
+    def test_public_files_in_shared_drives(self):
+        self.write_csv("shareddrive_external", """id,name,shareddrive.name,permission.type,permission.role,permission.allowFileDiscovery
+f1,Payroll.xlsx,Finance,anyone,reader,True
+f2,Rota.xlsx,Finance,anyone,reader,False""")
+        findings = {f.fid: f for f in ts.check_public_files(self.ctx)}
+        self.assertEqual("CRITICAL",
+                         findings["public-files-shareddrive_external"].severity)
+        self.assertEqual("Finance", findings[
+            "public-files-shareddrive_external"].evidence[0]["Owner"])
+        self.assertEqual("INFO",
+                         findings["anyone-link-shareddrive_external"].severity)
 
     def test_link_only_at_scale_is_high(self):
         rows = "\n".join(

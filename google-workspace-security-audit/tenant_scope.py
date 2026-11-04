@@ -2520,6 +2520,19 @@ def check_public_files(ctx: RunContext) -> List[Finding]:
                 "Review the list and restrict sharing to named people or "
                 "groups where the open link is not deliberate.",
                 linked, f"{key}.csv"))
+        elif linked:
+            # Below the scale it is not a finding of volume, but the check
+            # must not read as clean with link-shared files present.
+            findings.append(Finding(
+                f"anyone-link-{key}", "INFO",
+                f"\"Anyone with the link\" files in {where}",
+                f"{len(linked)} file(s) can be opened by anyone who has the "
+                "link, with no sign-in. Fewer than "
+                f"{ANYONE_LINK_SCALE}, so listed for review rather than "
+                "flagged.",
+                "Check each file is meant to be open to anyone with the link; "
+                "restrict the rest to named people or groups.",
+                linked, f"{key}.csv"))
     return findings
 
 
