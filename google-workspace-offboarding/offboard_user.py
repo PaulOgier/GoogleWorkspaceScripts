@@ -4346,6 +4346,9 @@ def verify_drive_backup_complete(email: str, backup_path: Path,
             "completeness check. Verify the file count by hand before deleting "
             "the source account."
         )
+        # Without this the summary's "Drive backed up" read as verified (OFF-22).
+        summary_warning(f"Drive backup for {email} NOT reconciled against Drive "
+                        f"(the file listing failed); verify the count by hand")
         return (0, 0)
 
     drive_files = _parse_gam_got_count(out)
@@ -4367,12 +4370,18 @@ def verify_drive_backup_complete(email: str, backup_path: Path,
         # a folder resumed on top of an earlier backup can carry leftovers that
         # pad local_files past drive_files and hide the shortfall.
         # rclone named them, so stop guessing at causes for these ones.
+        # The totals can show no shortfall at all when leftovers pad the
+        # folder, so the count never goes below what rclone named (OFF-21).
+        shortfall = max(shortfall, len(duplicates))
+        padded = (f"{local_files} on disk, padded by files from an earlier "
+                  f"backup into this folder" if local_files >= drive_files
+                  else f"{local_files} on disk")
         print_warning(
             f"{Colours.RED}Drive backup is SHORT: {drive_files} file(s) owned "
-            f"in Drive but {local_files} on disk ({drive_files - local_files} "
-            f"missing). rclone named {len(duplicates)} of them as same-name "
-            f"collisions and dropped them — on Drive they are distinct file "
-            f"IDs, on disk the second would overwrite the first:{Colours.RESET}"
+            f"in Drive, {padded}. rclone named {len(duplicates)} file(s) as "
+            f"same-name collisions and dropped them — on Drive they are "
+            f"distinct file IDs, on disk the second would overwrite the "
+            f"first:{Colours.RESET}"
         )
         for item in duplicates:
             print_warning(f"    - {item}")
@@ -4389,8 +4398,8 @@ def verify_drive_backup_complete(email: str, backup_path: Path,
         # warned loudly and still exited 0, so any wrapper reading only the exit
         # status went on to delete the source account (issue #11).
         summary_error(
-            f"Drive backup at {backup_path} is short by {shortfall} file(s); "
-            f"rclone dropped these as same-name collisions: "
+            f"Drive backup at {backup_path} is short by at least {shortfall} "
+            f"file(s); rclone dropped these as same-name collisions: "
             f"{'; '.join(duplicates)}"
         )
     elif drive_files and local_files < drive_files and genuinely_missing:

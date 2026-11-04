@@ -1443,6 +1443,19 @@ class TestDriveBackup(OffboardTestCase):
         self.assertTrue(any("unaccounted for" in e for e in offb.summary_errors))
         self.assertEqual(offb.exit_code, 1)
 
+    def test_padded_folder_with_a_duplicate_prints_no_negative_or_zero_count(self):
+        """OFF-21: leftovers plus one duplicate printed "(-2 missing)" and
+        "short by 0 file(s)"."""
+        for i in range(5):
+            (self.b / f"f{i}.docx").write_text("x")
+        warned = []
+        with mock.patch.object(offb, "print_warning", warned.append):
+            self._verify(self._filelist(3), duplicates=["Notes.docx"])
+        text = " ".join(warned + offb.summary_errors)
+        self.assertNotIn("-2", text)
+        self.assertNotIn("by 0 ", text)
+        self.assertTrue(any("at least 1 " in e for e in offb.summary_errors), offb.summary_errors)
+
     def test_matching_backup_is_quiet(self):
         """Was B9_2."""
         for name in ("a.docx", "b.docx"):
@@ -1458,10 +1471,12 @@ class TestDriveBackup(OffboardTestCase):
         (sub / "deep.docx").write_text("x")
         self.assertEqual(self._verify(self._filelist(1)), (1, 1))
 
-    def test_gam_failure_does_not_raise_or_warn(self):
-        """Was B9_4."""
+    def test_gam_failure_does_not_raise_but_warns_in_the_summary(self):
+        """Was B9_4, which pinned no warning. OFF-22: an unreconciled backup
+        left no summary trace, so "Drive backed up" read as verified."""
         self.assertEqual(self._verify(self._filelist(1), ok=False), (0, 0))
-        self.assertFalse(offb.summary_warnings)
+        self.assertFalse(offb.summary_errors)
+        self.assertTrue(any("NOT reconciled" in w for w in offb.summary_warnings))
 
     def test_progress_lines_do_not_inflate_the_count(self):
         """Was B9_5."""
