@@ -316,9 +316,9 @@
         <span class="field-hint">Set up Gmail forwarding to this address. Can be a group. Only catches new mail — messages that arrived while the account was suspended are not forwarded retroactively.</span>
       </div>
       <div class="field">
-        <label class="field-label" for="forward-alias-to">Successor for end-of-run notice <span class="hint">— <code>--forward-alias-to</code>. Group allowed.</span></label>
+        <label class="field-label" for="forward-alias-to">Successor for mail capture <span class="hint">— <code>--forward-alias-to</code>. Group allowed.</span></label>
         <input type="email" id="forward-alias-to" placeholder="user, group, or leave blank" autocomplete="off">
-        <span class="field-hint">Sends a summary notice to this address after the script finishes. Can be a group or the manager. Leave blank to skip the end-of-run email.</span>
+        <span class="field-hint">Named in the end-of-run MANUAL ACTION block, with Admin console steps for capturing mail to the leaver's address after suspension. Sends no email and makes no change. Can be a group or the manager.</span>
       </div>
     </div>
   </div>
@@ -388,8 +388,8 @@
       <span class="field-hint">Where snapshots, mailbox backups and Drive backups are written. A mailbox backup can reach hundreds of gigabytes, so point this at a local disk and <strong>never inside iCloud, OneDrive, Dropbox or Google Drive</strong> — a synced folder will try to upload all of it. Since v5.4.0 a re-run that finds an earlier mailbox backup here offers to resume into it instead of re-downloading (under <code>--force</code> it resumes automatically when the folder is 30 days old or less); since v5.5.0 Drive backups resume the same way, and the mailbox size is checked against free disk space before the download starts.</span>
     </div>
     <div class="field" style="margin-top:10px;">
-      <label class="field-label" for="restore-batch-size">Restore batch size <span class="hint">— <code>--restore-batch-size</code>. Default <code>50</code>, must be 1&ndash;100.</span></label>
-      <input type="number" id="restore-batch-size" min="1" max="100" placeholder="50" autocomplete="off">
+      <label class="field-label" for="restore-batch-size">Restore batch size <span class="hint">— <code>--restore-batch-size</code>. Default <code>50</code>, must be 2&ndash;100.</span></label>
+      <input type="number" id="restore-batch-size" min="2" max="100" placeholder="50" autocomplete="off">
       <span class="field-hint">GYB rejects anything outside 1&ndash;100 outright, and it does so only when the restore starts — after the mailbox has already been downloaded, which on a large mailbox is hours. Since v5.2.0 the script checks the value when you launch it instead.</span>
       <span class="field-hint">Messages sent per request when restoring mail. Measured on a real mailbox: 1 gives ~1,200 msg/hr, 10 gives ~5,800, 100 gives ~9,100. GYB rejects anything above 100. The script steps this down automatically (100 → 75 → 50 → 25 → 10) if Gmail starts throttling, so the default is a safe starting point.</span>
     </div>
@@ -592,10 +592,8 @@
 
     const batchSizeVal = trimmed('restore-batch-size');
     if (mode !== 'scorched') {
-      if (batchSizeVal && (!/^[0-9]+$/.test(batchSizeVal) || +batchSizeVal < 1 || +batchSizeVal > 100)) {
-        errors.push('Restore batch size must be a whole number from 1 to 100. GYB rejects anything above 100.');
-      } else if (batchSizeVal && +batchSizeVal === 1) {
-        notes.push('Batch size 1 uploads one message per request and only saves progress at the end, so a crash restarts from the first message. Use 10 or more unless you have a reason not to.');
+      if (batchSizeVal && (!/^[0-9]+$/.test(batchSizeVal) || +batchSizeVal < 2 || +batchSizeVal > 100)) {
+        errors.push('Restore batch size must be a whole number from 2 to 100. GYB rejects anything above 100, and 1 saves restore progress only at the end, so the script refuses it.');
       }
     }
 
@@ -625,6 +623,11 @@
       }
     }
 
+    // The script refuses this pair: an account that starts suspended always ends suspended.
+    if (mode !== 'scorched' && !reuseVal && $('unsuspend').checked && $('no-suspend').checked) {
+      errors.push('--unsuspend cannot be combined with --no-suspend: an account that starts suspended is always returned to suspended.');
+    }
+
     // Label radio mutual exclusion is enforced by radio inputs; nothing to check.
 
     if (mode === 'exec') {
@@ -632,7 +635,7 @@
       const noTransfer = $('no-transfer').checked;
       if (forced && noTransfer) {
         notes.push('--no-transfer is set: destination checks are skipped because no transfer phases will run.');
-      } else if (forced && !noTransfer) {
+      } else if (forced && !noTransfer && !reuseVal) {
         // Mirror the script's preflight_destinations() — every non-skipped
         // transfer phase must have a resolvable destination.
         PHASE_DEST.forEach(({ phase, skipId }) => {

@@ -58,5 +58,37 @@ fire($('all-to'), 'input');
 check('execute mode: not emitted',
       !out().includes('--allow-orphaned-shared-drives'), out());
 
+// OFF-09: combinations the script refuses must disable Copy, and ones it
+// accepts must not.
+const copyOk = () => !$('copy').disabled;
+const setVal = (id, v) => { $(id).value = v; fire($(id), 'input'); };
+const tick = (id, on) => { $(id).checked = on; fire($(id)); };
+
+tick('force', true);
+tick('unsuspend', true); tick('no-suspend', true);
+check('--unsuspend with --no-suspend is refused', !copyOk(), out());
+tick('no-suspend', false);
+check('--unsuspend alone is accepted', copyOk(), $('validation').textContent);
+tick('unsuspend', false);
+
+setVal('restore-batch-size', '1');
+check('--restore-batch-size 1 is refused', !copyOk(), out());
+setVal('restore-batch-size', '2');
+check('--restore-batch-size 2 is accepted', copyOk(), $('validation').textContent);
+setVal('restore-batch-size', '');
+
+setVal('all-to', '');
+setVal('email-to', 'successor@example.com');
+setVal('reuse-email-backup', '/backups/leaver');
+check('restore-only with --force and --email-to is accepted',
+      copyOk(), $('validation').textContent);
+check('restore-only emits --reuse-email-backup and --email-to',
+      out().includes('--reuse-email-backup') && out().includes('--email-to'), out());
+setVal('reuse-email-backup', '');
+setVal('email-to', '');
+
+check('--forward-alias-to help no longer promises an email',
+      !d.body.textContent.includes('Sends a summary notice'));
+
 console.log(fails ? `\n${fails} failed` : '\nall passed');
 process.exit(fails ? 1 : 0);

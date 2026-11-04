@@ -4858,7 +4858,7 @@ def parse_args():
              "path must contain msg-db.sqlite.")
     backup_grp.add_argument(
         "--restore-batch-size", type=int, metavar="N", default=RESTORE_BATCH_SIZE,
-        help=f"Messages per Gmail import request on restore (1-100, default "
+        help=f"Messages per Gmail import request on restore (2-100, default "
              f"{RESTORE_BATCH_SIZE}). GYB's own default is 1 = serial + only "
              f"commits resume state at the end (a crash restarts from scratch); "
              f">1 batches small messages (fast) and commits per batch (a crash "
@@ -4972,7 +4972,7 @@ def parse_args():
     # the mailbox backup has already run, which on a large mailbox is hours.
     if not 1 <= args.restore_batch_size <= 100:
         parser.error(
-            f"--restore-batch-size must be between 1 and 100 "
+            f"--restore-batch-size must be between 2 and 100 "
             f"(got {args.restore_batch_size}); GYB rejects anything outside "
             f"that range. Use {RESTORE_BATCH_SIZE} unless you have a reason."
         )

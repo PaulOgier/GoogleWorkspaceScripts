@@ -226,7 +226,7 @@ interactive prompt (only without `--force`).
 | `--backup-email` | Download the mailbox locally with GYB without restoring it anywhere. If a mailbox migration also runs, the migration's retained backup serves as the archive and nothing is downloaded twice. |
 | `--backup-dir <path>` | Root for all backups (snapshots, mailbox, Drive). Default `./offboarding_backups`. Point it outside any synced folder. |
 | `--reuse-email-backup <path>` | Restore from an existing GYB backup folder and skip the download. For resuming a restore that died partway. |
-| `--restore-batch-size <n>` | Messages per Gmail import request on restore, 1 to 100, default 50. Drop towards 10 if Gmail rate-limits. |
+| `--restore-batch-size <n>` | Messages per Gmail import request on restore, 2 to 100, default 50 (1 is refused: GYB would save restore progress only at the end). Drop towards 10 if Gmail rate-limits. |
 | `--strip-labels` / `--keep-labels` | On restore, discard the original Gmail labels (default under `--force`) or keep them. The migrated label is added either way. |
 
 **Skipping phases**
