@@ -660,6 +660,51 @@ AUDIT_2026_11 += [
     ('import subprocess, os as run\nsubprocess.run(["gam", "info", "domain"])\nrun = subprocess.run\nrun(["gam", "delete", "user", "b@example.com"])', 'python', g.DESTRUCTIVE, 'floor'),
     ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nos.execv(sys.argv[1], ["gam", "print", "users"])', 'python', g.UNKNOWN, 'floor'),
     ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nos.execvp("gam", ["gam", "print", "users"])', 'python', g.READ, 'exact'),
+    # an exec path built at runtime, partial bindings carried through a chain of names, assignments that disagree
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nos.execv(f"{sys.argv[1]}", ["gam", "print", "users"])', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nos.execv("{}".format(sys.argv[1]), ["gam", "print", "users"])', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nos.execv(f"/opt/{sys.argv[1]}/gam", ["x", "delete", "user", "b@example.com"])', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\na = functools.partial(os.execlp, "gam", "gam", "delete")\nb = a\nc = b\nc("user", "b@example.com")', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nrun = subprocess.run\nrun = functools.partial(os.execlp, "gam", "gam", "delete")\nrun("user", "b@example.com")', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nrun = subprocess.run\nrun = os.execlp\nrun("gam", "gam", "print", "users")', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\na = b\nb = a\nb = subprocess.run\na(["gam", "delete", "user", "b@example.com"])', 'python', g.DESTRUCTIVE, 'floor'),
+    # a lookup cut short or still in progress never reads as safe: memo, self-rebinding partials, global, long chains
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nt = os.execlp\nx7 = t\nx1 = x2\nx2 = x3\nx3 = x4\nx4 = x5\nx5 = x6\nx6 = x7\na = x1\na = t\na("gam", "gam", "delete", "user", "b@example.com")', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nif len(sys.argv) > 1:\n    run = os.execlp\nrun = functools.partial(run, "gam", "gam", "delete")\nrun("user", "b@example.com")', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nrun = os.execlp\nrun = functools.partial(run, "gam", "gam", "delete")\nrun("user", "b@example.com")', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nrun = os.execlp\ndef main():\n    global run\n    run = functools.partial(run, "gam", "gam", "delete")\n    run("user", "b@example.com")\nmain()', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nx0 = x1\nx1 = x2\nx2 = x3\nx3 = x4\nx4 = x5\nx5 = x6\nx6 = x7\nx7 = x8\nx8 = x9\nx9 = os.execlp\nx0("gam", "gam", "delete", "user", "b@example.com")', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\n' + ''.join(f'x{i} = x{i + 1}\n' for i in range(250)) + 'x250 = os.execlp\nx0("gam", "gam", "delete", "user", "b@example.com")', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nos.execv(f"/opt/{sys.argv[1]}/g" + "am", ["x", "delete", "user", "b@example.com"])', 'python', g.DESTRUCTIVE, 'floor'),
+    # a name being resolved reads as its import; closures, nonlocal, and a partial called where it is built
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nfrom os import execlp as run\nrun = functools.partial(run, "gam", "gam", "delete")\nrun("user", "b@example.com")', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nfrom subprocess import run\nrun = functools.partial(run, executable="/usr/local/bin/gam")\nrun(["x", "delete", "user", "b@example.com"])', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nfrom os import *\nexeclp = functools.partial(execlp, "gam", "gam", "delete")\nexeclp("user", "b@example.com")', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nfrom os import execlp as run\ndef main():\n    global run\n    run = functools.partial(run, "gam", "gam", "delete")\n    run("user", "b@example.com")\nmain()', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nimport subprocess as sp\nsp = functools.partial(sp.run, executable="/usr/local/bin/gam")\nsp(["x", "delete", "user", "b@example.com"])', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\ndef outer():\n    run = subprocess.run\n    def inner():\n        nonlocal run\n        run = functools.partial(run, executable="/usr/local/bin/gam")\n        run(["x", "delete", "user", "b@example.com"])\n    inner()\nouter()', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nf = lambda: functools.partial(os.execlp, "gam", "gam", "delete")("user", "b@example.com")\nf()', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nos = os.execlp\nos("gam", "gam", "delete", "user", sys.argv[1])', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nfrom subprocess import run\nif len(sys.argv) > 2:\n    run = functools.partial(run, shell=True)\nrun("gam delete user " + sys.argv[1])', 'python', g.UNKNOWN, 'floor'),
+    # a parameter, loop target or global in an inner function is never read as an outer or module constant
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\ndef outer():\n    verb = "info"\n    def inner():\n        global verb\n        verb = "delete"\n        subprocess.run(["gam", verb, "user", "b@example.com"])\n    inner()\nouter()', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\ndef outer():\n    verb = "info"\n    def inner(verb):\n        subprocess.run(["gam", verb, "user", "b@example.com"])\n    inner("delete")\nouter()', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\ndef outer():\n    prog = "/bin/echo"\n    def inner(prog):\n        subprocess.run([prog, "delete", "user", "b@example.com"])\n    inner("gam")\nouter()', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nverb = "info"\ndef inner(verb):\n    subprocess.run(["gam", verb, "user", "b@example.com"])\ninner("delete")', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nverb = "info"\ndef f():\n    for verb in ("delete",):\n        subprocess.run(["gam", verb, "user", "b@example.com"])\nf()', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nverb = "info"\nf = lambda verb: subprocess.run(["gam", verb, "user", "b@example.com"])\nf("delete")', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\np = functools.partial(functools.partial(subprocess.run, shell=True), "gam " + "delete" + " user b@example.com")\np()', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nfunctools.partial(functools.partial(subprocess.run, shell=True), "gam delete user " + sys.argv[1])()', 'python', g.UNKNOWN, 'floor'),
+    # a parameter or loop variable says nothing about which function a name holds: the run lookup reads past it
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nex = os.execlp\ndef f(ex):\n    ex("gam", "gam", "delete", "user", sys.argv[1])\nf(ex)', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nrun = subprocess.run\ndef g(run, *args):\n    run(["gam", *args])\ng(run, "delete", "user", sys.argv[1])', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nrun = functools.partial(os.execlp, "gam", "gam", "delete")\ndef f(run):\n    run("user", sys.argv[1])\nf(run)', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nex = os.execlp\ndef f():\n    [1 for ex in []]\n    ex("gam", "gam", "delete", "user", sys.argv[1])\nf()', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nverb = "info"\ndef f(cmd):\n    match cmd:\n        case str(verb):\n            subprocess.run(["gam", verb, "user", sys.argv[1]])\nf("delete")', 'python', g.UNKNOWN, 'floor'),
+    # a name not assigned in its own function counts every assignment around it: a run function anywhere is read
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nGAM = "gam"\nrun = subprocess.run\ndef outer():\n    class C:\n        run = print\n    def inner():\n        run([GAM, "delete", "user", "x@example.com"])\n    inner()\nouter()', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nGAM = "gam"\nrun = subprocess.run\ndef outer():\n    run = print\n    def inner(run):\n        run([GAM, "delete", "user", "x@example.com"])\n    return inner\nouter()(run)', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nGAM = "gam"\nrun = subprocess.run\ndef outer(fns):\n    run = print\n    def inner():\n        for run in fns:\n            run([GAM, "delete", "user", "x@example.com"])\n    inner()\nouter([run])', 'python', g.DESTRUCTIVE, 'floor'),
 ]
 
 
@@ -690,6 +735,26 @@ def test_audit_2026_11(checker):
             got = g.verdict(checker.check_text(f'gam info domain\n{text}\n', '<t>', 'shell', [Path(d)]))
             if got != want:
                 failures.append(f'{text}: got {g.LEVEL_NAMES[got]}, expected {g.LEVEL_NAMES[want]}')
+    # each name in a chain is looked up once: 12 names assigned 10 times each used to mean 10**8 lookups
+    import time
+    chain = ''.join(f'x{i} = x{i + 1}\n' * 10 for i in range(12))
+    start = time.monotonic()
+    checker.check_text('import subprocess\nsubprocess.run(["gam", "info", "domain"])\n' + chain + 'x0(["gam", "print", "users"])\n',
+                       '<t>', 'python')
+    if time.monotonic() - start > 5:
+        failures.append(f'name chain took {time.monotonic() - start:.1f}s')
+    # each function's global and nonlocal names are read once, not once per binding and per call
+    body = ''.join(f'    a{i}, b{i} = 1, 2\n    subprocess.run(["gam", "print", "users"])\n' for i in range(3000))
+    start = time.monotonic()
+    checker.check_text('import subprocess\ndef f():\n' + body, '<t>', 'python')
+    if time.monotonic() - start > 10:
+        failures.append(f'3000 bindings took {time.monotonic() - start:.1f}s')
+    # a called name is resolved once per function, not once per call
+    body = 'run = subprocess.run\n' * 2000 + 'run(["gam", "print", "users"])\n' * 2000
+    start = time.monotonic()
+    checker.check_text('import subprocess\n' + body, '<t>', 'python')
+    if time.monotonic() - start > 10:
+        failures.append(f'2000 assignments and calls took {time.monotonic() - start:.1f}s')
     for text, lang, level, kind in AUDIT_2026_11:
         got = g.verdict(checker.check_text(text + '\n', '<t>', lang))
         if (kind == 'floor' and severity[got] < severity[level]) or (kind == 'exact' and got != level):

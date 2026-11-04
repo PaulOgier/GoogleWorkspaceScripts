@@ -1813,6 +1813,9 @@ PY_LOCAL = {
     'compile': (UNKNOWN, 'compiles Python code built at runtime'),
 }
 PLACEHOLDER = '\x00'
+# match/case nodes exist from Python 3.10; on 3.9 these are empty and match nothing
+MATCH_CAPTURES = tuple(getattr(ast, n) for n in ('MatchAs', 'MatchStar') if hasattr(ast, n))
+MATCH_REST = tuple(getattr(ast, n) for n in ('MatchMapping',) if hasattr(ast, n))
 
 
 class _Splat:
@@ -1833,14 +1836,22 @@ class _PythonReader:
         self.findings = []
         self.parent = {}
         self.scopes = {}   # function node (or None for module level) -> {name: [assigned values]}
-        self.local = {}
+        self.local, self.fn = {}, None
+        self.resolved = {}  # (function, name) -> run function, filled by _name
+        self.target_names = {}  # id(assigned expression) -> names in it
         self.star = []     # modules imported with from x import *
-        self.bound = set() # names bound to functools.partial(run, <arguments>)
+        self.bound = {}    # name -> reason its calls read CANNOT TELL (partial with arguments, run functions that disagree)
 
     def run(self):
         for node in ast.walk(self.tree):
             for child in ast.iter_child_nodes(node):
                 self.parent[child] = node
+        self.declared = {}  # function -> {name: 'global' or 'nonlocal'}, its own declarations only
+        for node in ast.walk(self.tree):
+            if isinstance(node, (ast.Global, ast.Nonlocal)):
+                for name in node.names:
+                    self.declared.setdefault(self._enclosing(node), {})[name] = \
+                        'global' if isinstance(node, ast.Global) else 'nonlocal'
         for node in ast.walk(self.tree):
             if isinstance(node, ast.Import):
                 for n in node.names:
@@ -1854,7 +1865,7 @@ class _PythonReader:
             elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 if len(targets) == 1 and isinstance(targets[0], ast.Name):
-                    scope = self.scopes.setdefault(self._enclosing(node), {})
+                    scope = self.scopes.setdefault(self._assign_scope(node, targets[0].id), {})
                     scope.setdefault(targets[0].id, []).append(node.value)
                 elif len(targets) == 1 and isinstance(targets[0], ast.Subscript) and isinstance(targets[0].value, ast.Name):
                     # cmd[1] = 'delete' after cmd = [...]: a second value makes the name a runtime value
@@ -1864,9 +1875,32 @@ class _PythonReader:
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) \
                     and node.func.attr in ('append', 'extend', 'insert', 'pop', 'remove', 'clear', 'reverse', 'sort'):
                 self.scopes.setdefault(self._enclosing(node), {}).setdefault(node.func.value.id, []).append(node)  # cmd.append(...): runtime
+        # Any other binding (a parameter, a loop, with or comprehension target, walrus, except name,
+        # tuple target, del, an import inside a function) makes the name a runtime value in its scope,
+        # so a constant assigned elsewhere is never read through it.
+        for node in ast.walk(self.tree):
+            names = []
+            if isinstance(node, ast.arg):
+                names = [node.arg]
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                up = self.parent.get(node)
+                simple = isinstance(up, (ast.AnnAssign, ast.AugAssign)) or \
+                    (isinstance(up, ast.Assign) and len(up.targets) == 1 and up.targets[0] is node)
+                names = [] if simple else [node.id]
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                names = [node.name]
+            elif isinstance(node, MATCH_CAPTURES) and node.name:
+                names = [node.name]
+            elif isinstance(node, MATCH_REST) and node.rest:
+                names = [node.rest]
+            elif isinstance(node, (ast.Import, ast.ImportFrom)) and self._enclosing(node) is not None:
+                names = [(a.asname or a.name).split('.')[0] for a in node.names if a.name != '*']
+            for name in names:
+                # ast.Pass stands for "bound at runtime": nothing resolves it, so the name reads as a runtime value
+                self.scopes.setdefault(self._assign_scope(node, name), {}).setdefault(name, []).append(ast.Pass())
         functions = [fn for fn in ast.walk(self.tree) if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))]
         for fn in functions:
-            self.local = self.scopes.get(fn, {})
+            self.fn, self.local = fn, self.scopes.get(fn, {})
             self._find_wrapper(fn)
         # A function that hands work to a wrapper (pool.submit(run_gam, args)) is
         # itself a wrapper, but the shape it takes commands in is its own.
@@ -1884,11 +1918,43 @@ class _PythonReader:
                     self.indirect[fn.name] = self.wrappers[ref][0] if ref in self.wrappers else self.indirect[ref]
         for node in ast.walk(self.tree):
             if isinstance(node, ast.Call):
-                self.local = self.scopes.get(self._enclosing(node), {})
+                self.fn = self._enclosing(node)
+                self.local = self.scopes.get(self.fn, {})
                 self._call(node)
         self._strings()
         self.findings.extend(self._credentials())
         return self.findings
+
+    def _assign_scope(self, node, name):
+        """The scope an assignment to name lands in: module level when the function declares it global."""
+        fn = self._enclosing(node)
+        kind = self.declared.get(fn, {}).get(name) if fn is not None else None
+        if kind == 'global':
+            return None
+        if kind == 'nonlocal':
+            return self._enclosing(fn)  # shortcut: nonlocal is taken as one level up, not the nearest function assigning it
+        return fn
+
+    def _run_values(self, name):
+        """Assignments a called name may hold: its own function's, else the enclosing functions', else module level.
+
+        Only run-function lookup uses the enclosing functions. A parameter or loop variable of
+        the same name in the inner function is not an assignment here, so constants (_const)
+        never look outward: reading an outer constant there would be a silent wrong answer.
+        """
+        # A parameter or loop variable (ast.Pass here) says nothing about which function it holds:
+        # its value comes from a caller, so every assignment around it counts (def f(ex): ex(...)
+        # after ex = os.execlp reads as os.execlp, even with ex = print in between). A run function
+        # anywhere is read, never silence; a class body is not a scope here, so it counts too.
+        values = [v for v in self.local.get(name, []) if not isinstance(v, ast.Pass)]
+        if values:
+            return values
+        fn = self.fn
+        while fn is not None and self.declared.get(fn, {}).get(name) != 'global':
+            fn = self._enclosing(fn)
+            if fn is not None:
+                values += [v for v in self.scopes.get(fn, {}).get(name, []) if not isinstance(v, ast.Pass)]
+        return values + [v for v in self.scopes.get(None, {}).get(name, []) if not isinstance(v, ast.Pass)]
 
     def _enclosing(self, node):
         """The function a node sits in, or None at module level."""
@@ -1897,37 +1963,77 @@ class _PythonReader:
             node = self.parent.get(node)
         return node
 
-    def _name(self, func, depth=0):
+    def _name(self, func, depth=0, memo=None):
         """Dotted name of a called function with import aliases resolved.
 
         A name bound to a run function (run = subprocess.run, partial(subprocess.run, ...)),
         getattr(subprocess, "run") and a run function from a star import resolve to that function.
+        A name whose assignments disagree, or that binds arguments through partial (directly
+        or through a chain of names), lands in self.bound so its calls read CANNOT TELL.
+        memo holds each name resolved in this lookup once, which also stops a = b; b = a cycles.
+        A name still being resolved reads as its import there, as Python reads it before the
+        rebinding; a partial with arguments over it (run = partial(run, ...)) makes the name bound
+        when it ends up a run function. Pending state travels through chains in memo[''].
         """
+        top = memo is None
+        if top and isinstance(func, ast.Name) and (self.fn, func.id) in self.resolved:
+            return self.resolved[(self.fn, func.id)]  # a name's run function is worked out once per function
+        memo = {'': set(), '\0': set()} if memo is None else memo  # '\0': names being resolved
+        if top and isinstance(func, ast.Name):
+            self.resolved[(self.fn, func.id)] = self._name(func, depth, memo)
+            return self.resolved[(self.fn, func.id)]
         if isinstance(func, ast.Name):
+            if func.id in memo:
+                return memo[func.id]
+            if depth >= 200:
+                # shortcut: a chain of 200 distinct names is not followed; it reads CANNOT TELL instead of silent
+                self.bound[func.id] = 'runs a command through a chain of names too long to follow'
+                return 'subprocess.run'
+            fallback = self.aliases.get(func.id) or \
+                next((f'{m}.{func.id}' for m in self.star if f'{m}.{func.id}' in EXEC_CALLS), None) or func.id
+            memo[func.id] = fallback
+            memo['\0'].add(func.id)
             # every assignment of the name is tried before its import, so a later run = subprocess.run counts
-            for value in (self.local.get(func.id) or self.scopes.get(None, {}).get(func.id) or []) if depth < 8 else []:
-                partial = isinstance(value, ast.Call) and value.args and \
-                    self._name(value.func, depth + 1) in ('functools.partial', 'partial')
-                target = value.args[0] if partial else value
+            found, pending = {}, False
+            for value in self._run_values(func.id):
+                target, binds = self._unpartial(value, depth + 1, memo)
                 if isinstance(target, (ast.Name, ast.Attribute, ast.Call)):
-                    bound = self._name(target, depth + 1)
-                    if bound in EXEC_CALLS:
-                        if partial and (len(value.args) > 1 or any(k.arg in ('args', 'shell', 'executable', None)
-                                                                   for k in value.keywords)):
-                            self.bound.add(func.id)
-                        return bound
-            if func.id in self.aliases:
-                return self.aliases[func.id]
-            star = next((f'{m}.{func.id}' for m in self.star if f'{m}.{func.id}' in EXEC_CALLS), None)
-            return star or func.id
+                    run = self._name(target, depth + 1, memo)
+                    if id(target) not in self.target_names:  # walked once, not once per function calling the name
+                        self.target_names[id(target)] = {n.id for n in ast.walk(target) if isinstance(n, ast.Name)}
+                    names = self.target_names[id(target)]
+                    if names & memo[''] or (binds and names & memo['\0']):
+                        pending = True
+                    if run in EXEC_CALLS:
+                        binds = binds or (isinstance(target, ast.Name) and target.id in self.bound)
+                        found[run] = found.get(run, False) or binds
+            memo['\0'].discard(func.id)
+            result = next(iter(found)) if found else fallback
+            if len(found) > 1:
+                self.bound[func.id] = 'runs a command through a name assigned more than one run function'
+            elif any(found.values()) or (pending and result in EXEC_CALLS):
+                self.bound[func.id] = 'runs a command through functools.partial with bound arguments'
+            elif pending:
+                memo[''].add(func.id)
+            memo[func.id] = result
+            return result
         if isinstance(func, ast.Attribute):
-            base = self._name(func.value, depth)
+            base = self._name(func.value, depth, memo)
             return f'{base}.{func.attr}' if base else func.attr
-        if isinstance(func, ast.Call) and self._name(func.func, depth) == 'getattr' and len(func.args) >= 2:
+        if isinstance(func, ast.Call) and self._name(func.func, depth, memo) == 'getattr' and len(func.args) >= 2:
             attr = func.args[1]
             if isinstance(attr, ast.Constant) and isinstance(attr.value, str):
-                return f'{self._name(func.args[0], depth)}.{attr.value}'
+                return f'{self._name(func.args[0], depth, memo)}.{attr.value}'
         return None
+
+    def _unpartial(self, node, depth=0, memo=None):
+        """(innermost function, whether any layer binds arguments) for partial(partial(f, ...), ...)."""
+        binds = False
+        while isinstance(node, ast.Call) and node.args and \
+                self._name(node.func, depth, memo) in ('functools.partial', 'partial'):
+            binds = binds or len(node.args) > 1 or any(k.arg in ('args', 'shell', 'executable', None) for k in node.keywords)
+            node = node.args[0]
+        return node, binds
 
     def _const(self, name):
         """The value of a name assigned exactly once in the current function, else at module level.
@@ -2038,7 +2144,8 @@ class _PythonReader:
             path_at = shape[1] - 1  # exec*(path, ...), spawn*(mode, path, ...): the path is what runs, not argv[0]
             if toks and path_at >= 0:
                 path = self._string(call.args[path_at], params) if len(call.args) > path_at else None
-                toks = [Dyn(ast.unparse(call.args[path_at])) if path is None else path] + toks[1:]
+                toks = [Dyn(ast.unparse(call.args[path_at])) if path is None else
+                        Dyn(path.replace(PLACEHOLDER, '{...}')) if PLACEHOLDER in path else path] + toks[1:]
             return toks, False
         target = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg in ('args', 'command', 'cmd')), None)
         if target is None:
@@ -2085,14 +2192,20 @@ class _PythonReader:
         if short_name in self.indirect and name not in EXEC_CALLS:
             self._indirect_call(node, short_name)
             return
+        if isinstance(node.func, ast.Call) and self._unpartial(node.func)[0] is not node.func and \
+                self._name(self._unpartial(node.func)[0]) in EXEC_CALLS:
+            self.findings.append(Finding(self.ctx.file, node.lineno, UNKNOWN,
+                                         'runs a command through functools.partial with bound arguments',
+                                         ast.unparse(node)[:140], note='check the partial and this call together'))
+            return
         if name not in EXEC_CALLS:
             return
         if any(node is w[3] for w in self.wrappers.values()):
             return
         if isinstance(node.func, ast.Name) and node.func.id in self.bound:
             self.findings.append(Finding(self.ctx.file, node.lineno, UNKNOWN,
-                                         'runs a command through functools.partial with bound arguments',
-                                         ast.unparse(node)[:140], note='check the partial and this call together'))
+                                         self.bound[node.func.id],
+                                         ast.unparse(node)[:140], note='check its assignments and this call together'))
             return
         toks, via_shell = self._exec_argv(node)
         via_shell = via_shell or name in ('os.system', 'os.popen', 'subprocess.getoutput', 'subprocess.getstatusoutput',
@@ -2182,7 +2295,8 @@ class _PythonReader:
             if isinstance(self.parent.get(node), ast.JoinedStr):
                 continue  # a fragment of an f-string; the whole f-string is checked instead
             if isinstance(node, (ast.Constant, ast.JoinedStr)) and id(node) not in self.consumed:
-                self.local = self.scopes.get(self._enclosing(node), {})
+                self.fn = self._enclosing(node)
+                self.local = self.scopes.get(self.fn, {})
                 s = self._string(node)
                 if s and re.match(r'^\s*(?:\S*[/\\])?gam(?:\.exe)?\s+[A-Za-z]', s):
                     toks = self._split(s)
@@ -2214,7 +2328,8 @@ class _PythonReader:
             if not (isinstance(first, ast.Constant) and isinstance(first.value, str) and
                     (first.value.lower() in starts or _gam_name(first.value.strip(), set(), set()))):
                 continue
-            self.local = self.scopes.get(self._enclosing(node), {})
+            self.fn = self._enclosing(node)
+            self.local = self.scopes.get(self.fn, {})
             toks = self._argv(node)
             if not toks or any(isinstance(t, _Splat) for t in toks):
                 continue
