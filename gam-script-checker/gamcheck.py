@@ -985,29 +985,51 @@ def _dynamic(tok, lang):
     return tok
 
 
-def _strip_comment(line, lang):
-    """A physical line without its comment, the way the shell itself finds one.
+PS_QUOTES = {'\u2018': "'", '\u2019': "'", '\u201a': "'", '\u201b': "'",
+             '\u201c': '"', '\u201d': '"', '\u201e': '"'}
+
+
+def _strip_comment(line, lang, quote=''):
+    """A physical line without its comment, the way the shell itself finds one, and the quote still open at its end.
 
     A # starts a comment only at the start of a word and outside quotes, so $#, ${#VAR} and
-    word# are code. GAM batch files only skip whole-line comments (doBatch reads the rest with
-    shlex.split, comments off), and cmd.exe has no # comment at all.
+    word# are code. Quotes carry over from the line before; $'...' honours backslashes; inside
+    a backtick or $(...) substitution nothing is cut (bash runs the rest of `a # b`; gam ...).
+    PowerShell counts curly quotes as quotes. GAM batch files only skip whole-line comments
+    (doBatch reads the rest with shlex.split, comments off), and cmd.exe has no # comment.
     """
     if lang == 'batch':
-        return line
+        return line, ''
     if lang == 'gambatch':
-        return '' if line.lstrip().startswith('#') else line
-    quote, i = '', 0
+        return ('' if line.lstrip().startswith('#') else line), ''
+    esc = '`' if lang == 'powershell' else '\\'
+    depth, i = 0, 0
     while i < len(line):
         c = line[i]
-        if c == ('`' if lang == 'powershell' else '\\') and quote != "'":
+        if lang == 'powershell':
+            c = PS_QUOTES.get(c, c)
+        if c == esc and quote != "'":
             i += 2
             continue
-        if c in '\'"' and quote in ('', c):
-            quote = '' if quote else c
-        elif c == '#' and not quote and (i == 0 or line[i - 1] in ' \t;&|()'):
-            return line[:i]
+        if quote == "$'" and c == '\\':
+            i += 2
+            continue
+        if quote:
+            if c == quote[-1]:
+                quote = ''
+        elif lang == 'shell' and line.startswith("$'", i):
+            quote, i = "$'", i + 2
+            continue
+        elif c in '\'"' or (c == '`' and lang == 'shell'):
+            quote = c
+        elif line.startswith('$(', i):
+            depth += 1
+        elif c == ')' and depth:
+            depth -= 1
+        elif c == '#' and not depth and (i == 0 or line[i - 1] in ' \t;&|()'):
+            return line[:i], ''
         i += 1
-    return line
+    return line, quote
 
 
 def _logical_lines(text, lang):
@@ -1019,9 +1041,9 @@ def _logical_lines(text, lang):
     if lang == 'powershell':
         text = re.sub(r'<#.*?#>', lambda m: '\n' * m.group(0).count('\n'), text, flags=re.S)
     cont = {'shell': '\\', 'gambatch': None, 'powershell': '`', 'batch': '^'}[lang]
-    out, buf, start = [], '', None
+    out, buf, start, quote = [], '', None, ''
     for n, raw in enumerate(text.splitlines(), 1):
-        raw = _strip_comment(raw, lang)
+        raw, quote = _strip_comment(raw, lang, quote)
         stripped = raw.rstrip()
         if start is None:
             start = n
@@ -1042,6 +1064,9 @@ def _tokenise(line, lang):
     # shlex splits 2>&1 into 2, >&, 1 and the redirect is dropped later, so a
     # file-descriptor number glued to > or < is removed first; else "2" reads as an argument
     line = FD_REDIRECT.sub(r'\1', line)
+    if lang == 'shell':
+        # shlex does not know $'...' (it\'s escapes the quote); hand it a plain single-quoted word
+        line = re.sub(r"\$'((?:[^'\\]|\\.)*)'", lambda m: "'" + re.sub(r'\\(.)', r'\1', m.group(1)).replace("'", '') + "'", line)
     try:
         lex = shlex.shlex(line, posix=posix, punctuation_chars=';&|()<>')
         lex.whitespace_split = True

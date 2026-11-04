@@ -578,6 +578,12 @@ AUDIT_2026_11 = [
     ('gam info domain\n# output goes to C:\\GAM\\\ngam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
     ('gam info domain\n# note `\ngam delete user bob@example.com', 'powershell', g.DESTRUCTIVE, 'floor'),
     ('gam print users \\\n  query isSuspended=False', 'shell', g.READ, 'exact'),
+    # a # inside a quote the shell knows is not a comment
+    ("gam info domain\necho $'it\\'s # x'; gam delete user bob@example.com", 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nx=`echo a # b`; gam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nmsg="first line\nsecond # line"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nWrite-Host “a # b”; gam delete user bob@example.com', 'powershell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\necho "it\'s fine" # gam delete user x\ngam print users # done', 'shell', g.READ, 'exact'),
     # GAM batch files run one command per physical line
     ('gam print users \\\ngam delete user bob@example.com', 'gambatch', g.DESTRUCTIVE, 'floor'),
     ('# gam delete user x@example.com\ngam print users', 'gambatch', g.READ, 'exact'),
