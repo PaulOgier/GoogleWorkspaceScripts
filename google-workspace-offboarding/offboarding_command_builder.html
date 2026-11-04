@@ -513,7 +513,11 @@
       return `"${body}${suffix}${suffix}"`;
     }
     if (shell === 'powershell') {
-      return `'${value.replace(/'/g, "''")}'`;
+      // Windows PowerShell 5.1 and 7.0 to 7.2 re-quote an argument with a
+      // space as "..." for a native program, and a trailing \ then escapes
+      // that closing quote; doubled, it survives every PowerShell version.
+      const trailing = /\s/.test(value) ? (value.match(/\\+$/) || [''])[0] : '';
+      return `'${value.replace(/'/g, "''")}${trailing}'`;
     }
     return `'${value.replace(/'/g, `'"'"'`)}'`;
   }
@@ -822,8 +826,12 @@
   }
   function restoreForm(snap) {
     if (!snap) return;
-    document.querySelector(`input[name="mode"][value="${snap.mode || 'dry'}"]`).checked = true;
-    document.querySelector(`input[name="labels"][value="${snap.labels || 'ask'}"]`).checked = true;
+    // A stored value only selects a radio from the known set; a tampered or
+    // corrupt profile used to throw in the click handler.
+    const mode = ['dry', 'exec', 'scorched'].includes(snap.mode) ? snap.mode : 'dry';
+    const labels = ['ask', 'strip', 'keep'].includes(snap.labels) ? snap.labels : 'ask';
+    document.querySelector(`input[name="mode"][value="${mode}"]`).checked = true;
+    document.querySelector(`input[name="labels"][value="${labels}"]`).checked = true;
     $('force').checked = !!snap.force;
     $('use-python2').checked = !!snap.use_python2;
     $('command-shell').value = ['cmd', 'powershell', 'posix'].includes(snap.command_shell) ? snap.command_shell : 'cmd';

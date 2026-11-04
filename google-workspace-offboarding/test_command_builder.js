@@ -90,5 +90,29 @@ setVal('email-to', '');
 check('--forward-alias-to help no longer promises an email',
       !d.body.textContent.includes('Sends a summary notice'));
 
+// OFF-26(a): a trailing backslash on a quoted path survives PowerShell.
+$('command-shell').value = 'powershell'; fire($('command-shell'));
+setVal('backup-dir', 'C:\\Backup Folder\\');
+check('PowerShell doubles a trailing backslash in a spaced path',
+      out().includes("'C:\\Backup Folder\\\\'"), out());
+setVal('backup-dir', 'C:\\Backups\\');
+check('PowerShell leaves an unspaced path alone',
+      out().includes("--backup-dir 'C:\\Backups\\'"), out());
+setVal('backup-dir', '');
+$('command-shell').value = 'posix'; fire($('command-shell'));
+
+// OFF-26(b): a corrupt stored profile does not throw on Load.
+window.localStorage.setItem('offboarding_builder_profiles_v1',
+  JSON.stringify({ bad: { mode: 'x"]', labels: 42 } }));
+const sel = $('profile-select');
+const opt = d.createElement('option'); opt.value = 'bad'; opt.textContent = 'bad';
+sel.appendChild(opt); sel.value = 'bad';
+let threw = null;
+window.addEventListener('error', e => { threw = e.message; });
+$('profile-load').click();
+check('a corrupt profile loads without throwing', threw === null, threw);
+check('and falls back to Dry run',
+      d.querySelector('input[name="mode"]:checked').value === 'dry');
+
 console.log(fails ? `\n${fails} failed` : '\nall passed');
 process.exit(fails ? 1 : 0);
