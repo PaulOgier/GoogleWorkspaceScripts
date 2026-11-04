@@ -930,6 +930,17 @@ class TestSuspension(OffboardTestCase):
         self.assertIn("verified by read-back", self.actions().lower())
         self.assertFalse(offb.summary_errors)
 
+    def test_update_killed_by_ctrl_c_is_read_back_not_reported_active(self):
+        """Re-review: the write can land although gam was killed."""
+        def update(_args, _kw):
+            offb.shutdown_requested = True
+            return False, "Control-C"
+        with gam(FakeGam([(("update",), update),
+                          (("info", "user"), (True, SUSPENDED_USER))])), clocked():
+            self.assertTrue(offb.suspend_user(U, dry_run=False))
+        self.assertFalse(offb.summary_errors)
+        self.assertIn("after Ctrl+C", self.actions())
+
     def test_dry_run_reports_without_a_read_back(self):
         fake = FakeGam()
         with gam(fake):

@@ -169,7 +169,7 @@ Changelog
                         as it arrives; backup folders are chosen with the plan.
                         Command builder: the combinations the script refuses
                         are refused, restore-only works, PowerShell trailing
-                        backslashes are doubled. 283 tests.
+                        backslashes are doubled. 285 tests.
   2026-10-21 - v5.7.2 - Scorched earth no longer deletes the account when the
                         Shared Drive list cannot be read or parsed; it refuses
                         (exit 2), as it already did for an unreadable drive ACL.
@@ -2363,6 +2363,9 @@ def execute_kill_switch(email: str, dry_run: bool, is_suspended: bool,
     # flag had not flipped 6s later at 11:54:31, though it had within 15s.
     # A read here races that delay and answers for the OU the user left, so
     # turnoff2sv is simply attempted and the refusal handled where it happens.
+    elif shutdown_requested:
+        print_warning(f"OU move interrupted by Ctrl+C: check the user's OU "
+                      f"(gam info user {email} quick).")
     else:
         print_error("CRITICAL: Failed to move user to offboarding OU.")
 
@@ -4822,10 +4825,16 @@ def suspend_user(email: str, dry_run: bool, bypass_shutdown: bool = False) -> bo
     """
     print_header("SUSPENSION")
 
-    ok, _ = run_gam(
+    ok, out = run_gam(
         ["update", "user", email, "suspended", "on"],
         dry_run=dry_run, bypass_shutdown=bypass_shutdown
     )
+    if not ok and shutdown_requested and out != "Shutdown requested":
+        # Ctrl+C reached the gam child; the write may have landed, so read it.
+        ok = wait_for_suspended(email, True, timeout=30, bypass_shutdown=True)
+        if ok:
+            summary_action("User account suspended (verified by read-back after Ctrl+C)")
+            return True
     if not ok:
         print_error(
             f"CRITICAL: Suspension FAILED — {email} is still active. "
@@ -5304,7 +5313,7 @@ def finish_run(dry_run: bool) -> int:
     return exit_code
 
 
-def _abort_if_shutdown(dry_run: bool, after: str) -> None:
+def _abort_if_shutdown(dry_run: bool, after: str, rerun: bool = True) -> None:
     """Between phases: honour Ctrl+C or SIGTERM by summarising and exiting 130.
 
     The summary names the interruption and the exit code is not 0, so a
@@ -5312,8 +5321,9 @@ def _abort_if_shutdown(dry_run: bool, after: str) -> None:
     """
     global exit_code
     if shutdown_requested:
+        advice = " Re-run to finish the offboarding." if rerun else ""
         summary_warning(f"Run INTERRUPTED (Ctrl+C or SIGTERM) after {after}: "
-                        f"no later phase ran. Re-run to finish the offboarding.")
+                        f"no later phase ran.{advice}")
         exit_code = EXIT_INTERRUPTED
         sys.exit(finish_run(dry_run))
 
@@ -5668,7 +5678,7 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
         run_phase("Suspension", suspend_user, user_email, dry_run, bypass_shutdown=True)
         _abort_if_shutdown(dry_run, "suspension, before deletion")
         run_phase("User deletion", delete_user, user_email, dry_run)
-        _abort_if_shutdown(dry_run, "user deletion")
+        _abort_if_shutdown(dry_run, "user deletion", rerun=False)
         return finish_run(dry_run)
 
     # ---- Devices, groups, delegates ---------------------------------------
@@ -5795,6 +5805,9 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
 
     if not force_suspend:
         # A forced suspension still runs after Ctrl+C; any other is refused.
+        if shutdown_requested and plan["suspend"]["do"] and not temp_unsuspended:
+            summary_warning(f"{user_email} was NOT suspended (Ctrl+C before "
+                            f"suspension): gam update user {user_email} suspended on")
         _abort_if_shutdown(dry_run, "licence removal")
 
     # ---- Suspension (always last) ------------------------------------------
@@ -5840,7 +5853,7 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
                   bypass_shutdown=force_suspend)
     else:
         summary_skip("Suspension (declined)")
-    _abort_if_shutdown(dry_run, "suspension")
+    _abort_if_shutdown(dry_run, "suspension", rerun=False)
 
     code = finish_run(dry_run)
 

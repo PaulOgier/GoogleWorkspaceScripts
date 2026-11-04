@@ -520,8 +520,10 @@ class TestLateInterrupt(MainFlowCase):
         self.assertTrue(any("INTERRUPTED" in w and "licence removal" in w
                             for w in offb.summary_warnings), offb.summary_warnings)
         self.assertFalse(any("Suspension failed" in e for e in offb.summary_errors))
+        self.assertTrue(any("NOT suspended" in w for w in offb.summary_warnings),
+                        offb.summary_warnings)
 
-    def test_ctrl_c_mid_scorched_delete_exits_130(self):
+    def test_ctrl_c_at_scorched_delete_exits_130(self):
         gam = ScriptedGam()
 
         def interrupt_on_delete(args):
@@ -638,6 +640,20 @@ class TestTemporaryUnsuspend(MainFlowCase):
         self.assertTrue(any("Re-suspended (restored original state)" in a
                             for a in offb.summary_actions))
         self.assertTrue(gam.suspended)
+
+    def test_ctrl_c_during_licence_removal_still_resuspends(self):
+        """Re-review: the abort before suspension relies on finish_run's restore."""
+        gam = ScriptedGam(suspended=True)
+
+        def interrupt_on_licence(args):
+            if args[:2] == ["user", LEAVER] and "license" in args:
+                offb.shutdown_requested = True
+        gam.on_call = interrupt_on_licence
+        code = self.run_main(gam, "--doit", "--force", "--unsuspend", "--no-transfer",
+                             "--user", LEAVER)
+        self.assertEqual(code, offb.EXIT_INTERRUPTED, offb.summary_errors)
+        self.assertTrue(gam.suspended)
+        self.assertFalse(any("NOT suspended" in w for w in offb.summary_warnings))
 
     @staticmethod
     def _active_successor(gam):
