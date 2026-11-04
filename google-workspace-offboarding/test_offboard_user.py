@@ -730,6 +730,12 @@ class TestKillSwitch(OffboardTestCase):
         """Was A10_1."""
         self.assertNotIn("popimap", self._deprov_argv(has_mailbox=False))
 
+    def test_dropped_popimap_is_reported_with_the_manual_commands(self):
+        """OFF-19: the omission was silent, and the field can be wrong."""
+        self._deprov_argv(has_mailbox=False)
+        self.assertTrue(any("POP/IMAP not disabled" in w and "imap off" in w
+                            for w in offb.summary_warnings), offb.summary_warnings)
+
     def test_mailbox_keeps_popimap(self):
         """Was A10_2."""
         self.assertIn("popimap", self._deprov_argv(has_mailbox=True))
@@ -1317,6 +1323,15 @@ class TestStreamProcess(OffboardTestCase):
                                  lambda line: seen.append((line, time.monotonic() - start)))
         self.assertEqual([line for line, _ in seen], ["é ready"])
         self.assertLess(seen[0][1], 2.0, seen)
+
+
+class TestGybDb(OffboardTestCase):
+
+    def test_reading_a_folder_without_a_db_does_not_create_one(self):
+        """OFF-20: count_undated_messages created a 0-byte msg-db.sqlite."""
+        folder = self.tmpdir()
+        self.assertEqual(offb.count_undated_messages(folder), 0)
+        self.assertFalse((folder / "msg-db.sqlite").exists())
 
 
 class TestLogFile(OffboardTestCase):

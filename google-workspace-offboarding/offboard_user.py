@@ -2359,6 +2359,15 @@ def execute_kill_switch(email: str, dry_run: bool, is_suspended: bool,
     deprov_args = ["user", email, "deprovision", "signout"]
     if has_mailbox:
         deprov_args.insert(3, "popimap")
+    else:
+        # "Mailbox is setup" can read False on a licensed, restorable mailbox
+        # (see _email_mailbox_missing), so say what was left on (OFF-19).
+        print_warning(f"POP/IMAP not disabled: GAM reports no mailbox for {email}. "
+                      f"If it has mail, run: gam user {email} imap off, then "
+                      f"gam user {email} pop off")
+        summary_warning(f"POP/IMAP not disabled for {email} (GAM reported no "
+                        f"mailbox); if it has mail: gam user {email} imap off, "
+                        f"then gam user {email} pop off")
     do_2sv = is_2sv_enrolled and turn_off_2sv
     if do_2sv:
         deprov_args.append("turnoff2sv")
@@ -3101,6 +3110,10 @@ def _gyb_db(db_path):
     same DB can hit "database is locked". Found on Windows 11 ARM64,
     2026-07-29 — five call sites, all leaking.
     """
+    # sqlite3.connect() creates a missing file, and an empty msg-db.sqlite
+    # then passes for a backup folder (OFF-20). Callers catch OSError.
+    if not Path(db_path).is_file():
+        raise FileNotFoundError(f"{db_path} does not exist")
     db = sqlite3.connect(db_path)
     try:
         with db:
