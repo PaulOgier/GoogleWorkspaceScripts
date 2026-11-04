@@ -1587,9 +1587,14 @@ def _email_mailbox_missing(email: str) -> Optional[str]:
     return None
 
 
-def validate_destination(email: str, allow_group: bool = False) -> bool:
+def validate_destination(email: str, allow_group: bool = False,
+                         record: bool = True) -> bool:
     """
     Check that a destination exists and is active.
+
+    `record=False` prints a miss without adding a summary error: an
+    interactive re-ask lets the operator correct a typo, and a corrected one
+    must not leave the run at exit 1 (OFF-05).
 
     When allow_group is True, a Google Group address is also accepted
     (used for email-forwarding destinations, which Gmail allows to point
@@ -1625,7 +1630,8 @@ def validate_destination(email: str, allow_group: bool = False) -> bool:
 
     # No fallback worked — this is now a genuine error worth reporting.
     print_error(f"Destination user not found: {email}")
-    summary_error(f"Destination not found: {email}")
+    if record:
+        summary_error(f"Destination not found: {email}")
     return False
 
 
@@ -1898,7 +1904,7 @@ def _plan_email(question: str, allow_group: bool = False,
     """
     while True:
         email = prompt_email(question)
-        if not validate_destination(email, allow_group=allow_group):
+        if not validate_destination(email, allow_group=allow_group, record=False):
             # validate_destination already printed why it failed.
             print_warning("Destination did not validate — enter another.")
             continue

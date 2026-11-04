@@ -537,6 +537,18 @@ class TestDestinationPreflight(OffboardTestCase):
             got = offb._plan_email("Email dest", source=U, needs_mailbox=True)
         self.assertEqual(got, D)
 
+    def test_corrected_destination_typo_leaves_no_summary_error(self):
+        """OFF-05: a typo the operator corrected at the re-ask exited 1."""
+        typo = "jon@yourdomain.com"
+        with mock.patch.object(offb, "prompt_email", side_effect=[typo, D]), \
+             mock.patch.object(offb, "_user_quick_fields",
+                               side_effect=lambda e: None if e == typo else {}), \
+             mock.patch.object(offb, "_list_aliases", return_value=[]):
+            got = offb._plan_email("Drive dest", source=U)
+        self.assertEqual(got, D)
+        self.assertEqual(offb.summary_errors, [])
+        self.assertEqual(offb.exit_code, 0)
+
     def test_mailbox_probe_not_run_for_non_email_prompts(self):
         """Was B20_4."""
         with mock.patch.object(offb, "prompt_email", return_value=D), \
