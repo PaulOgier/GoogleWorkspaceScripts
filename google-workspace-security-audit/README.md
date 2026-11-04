@@ -319,7 +319,7 @@ timestamped run directory, with the report opened at the end.
 
 | Flag | What it does |
 |---|---|
-| `--admin <email>` | The auditing admin. Verifies the service account's DWD scopes in the preflight, and is the account the Shared Drive scans run as. Without it those scans are skipped and per-user modules run unverified. |
+| `--admin <email>` | The auditing admin. Verifies the service account's DWD scopes in the preflight, and is the account the Shared Drive scans run as. Without it those scans are skipped and per-user modules run unverified. With `--tenant` or `--all`, a tenant's `admin` in `tenants.json` is used when this is not given. |
 | `--list` | Print the module registry (key, title, tier) and exit. |
 | `--full` | Add the tier-4 modules: vacation responders, managed browsers, context-aware access, Gmail profile sizes and Drive file counts. |
 | `--only <keys>` | Comma-separated module keys; everything else is skipped except `domains` and `domainaliases`, which always run because every external-sharing check needs the tenant's domain list. If the domain list cannot be read, no address is reported as external and the report is held for review. |
@@ -459,7 +459,8 @@ before the report re-renders over the complete data set.
 Copy `tenants.example.json` to `~/.osh/workspace-audit/tenants.json` and add
 one entry per client: its customer ID, and optionally the GAM config folder
 for that tenant (`gamcfgdir`, used as `GAMCFGDIR`), emergency super admins
-(`break_glass`). Keep the real file out of the
+(`break_glass`) and the auditing admin for that tenant (`admin`, used when
+`--admin` is not given). Keep the real file out of the
 repository, since it names your clients.
 
 - The run stops before collecting anything if `gam info domain` answers with
@@ -469,6 +470,9 @@ repository, since it names your clients.
 - Break-glass accounts are left out of the dormancy checks and named in the
   report, rather than showing up every month as dormant admins.
 - `--all` carries on when one tenant fails and returns the worst exit code.
+- Give each entry its own `admin` for `--all`: without one the Shared Drive
+  scans are skipped and the report is held. `--admin` with `--all` uses that
+  one address for every tenant, and the script warns about it.
 
 Exit codes: `0` complete, `1` preflight failed or wrong tenant, `2` complete
 but some modules could not run, `130` interrupted.

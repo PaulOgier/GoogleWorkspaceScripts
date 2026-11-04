@@ -1,11 +1,12 @@
 {
-  "_comment": "Copy to ~/.osh/workspace-audit/tenants.json (or pass --tenants <path>) and fill in. Keep the real file out of the repository: it names your clients. customer_id is required: the run stops before collecting anything if gam info domain answers with a different one. gamcfgdir is the GAM config folder for that tenant (GAMCFGDIR); leave it out to use GAM's default. break_glass lists emergency super admins that are deliberately never signed into: they are left out of the dormancy checks and named in the report.",
+  "_comment": "Copy to ~/.osh/workspace-audit/tenants.json (or pass --tenants <path>) and fill in. Keep the real file out of the repository: it names your clients. customer_id is required: the run stops before collecting anything if gam info domain answers with a different one. gamcfgdir is the GAM config folder for that tenant (GAMCFGDIR); leave it out to use GAM's default. break_glass lists emergency super admins that are deliberately never signed into: they are left out of the dormancy checks and named in the report. admin is the auditing admin for that tenant (DWD scope check and Shared Drive scans), used when --admin is not given.",
   "tenants": {
     "clienta": {
       "name": "Client A (Pty) Ltd",
       "customer_id": "C00000000",
       "gamcfgdir": "~/GAMConfig/clienta",
       "break_glass": ["breakglass@clienta.example"],
+      "admin": "itadmin@clienta.example",
       "enabled": true
     },
     "lab": {

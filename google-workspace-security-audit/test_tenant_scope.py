@@ -38,13 +38,26 @@ def setUpModule():
     fixture data. A tester read that as a report on their own tenant
     (Kim Nilsson, 2026-08-17).
     """
-    global _emit_original
+    global _emit_original, _locate_original, _popen_original
     _emit_original = ts._emit
     ts._emit = lambda level, text: None
+    # No test may reach a real gam: preflight's fallback path finds an
+    # installed ~/bin/gam7/gam, which would query the tester's own tenant.
+    _locate_original = ts.locate_gam
+    ts.locate_gam = lambda: None
+    _popen_original = ts._popen_isolated
+
+    def fenced(cmd, **kwargs):
+        if "gam" in Path(str(cmd[0])).name.lower():
+            raise AssertionError(f"test reached a real gam: {cmd[:3]}")
+        return _popen_original(cmd, **kwargs)
+    ts._popen_isolated = fenced
 
 
 def tearDownModule():
     ts._emit = _emit_original
+    ts.locate_gam = _locate_original
+    ts._popen_isolated = _popen_original
 
 
 class CtxTestCase(unittest.TestCase):
@@ -2337,7 +2350,17 @@ class TestMonthlyService(CtxTestCase):
         self.ctx.args.tenant_entry = {"customer_id": "C0right"}
         self.assertFalse(ts.preflight(self.ctx, []))
         self.assertEqual(["version", "info"], calls)   # nothing after identity
-        self.assertIn("NOT C0right", self.ctx.manifest["preflight"][-1][2])
+        self.assert_refused_dir_untouched()
+
+    def assert_refused_dir_untouched(self):
+        """A refused run directory gains neither the answering tenant's
+        identity, its preflight table nor its seat counts (AUD-08)."""
+        self.assertFalse((self.run_dir / "domaininfo.txt").exists())
+        for manifest in (self.ctx.manifest,
+                         ts.RunContext(self.run_dir, make_args()).manifest):
+            self.assertEqual([], manifest.get("preflight", []))
+            self.assertNotIn("C_NEW", json.dumps(manifest))
+            self.assertNotIn("C0other", json.dumps(manifest))
 
     def stub_gam_for(self, customer_id):
         def fake_gam(args, **_):
@@ -2358,7 +2381,26 @@ class TestMonthlyService(CtxTestCase):
         meta = ts.RunContext(self.run_dir, make_args()).manifest["meta"]
         self.assertEqual("C_OLD", meta["customer_id"])
         self.assertEqual("old.example", meta["primary_domain"])
-        self.assertIn("NOT C_OLD", self.ctx.manifest["preflight"][-1][2])
+        self.assert_refused_dir_untouched()
+
+    def test_render_only_refuses_another_customers_run(self):
+        self.ctx.manifest["meta"].update(customer_id="C_A", tenant_name="A")
+        self.ctx.save()
+        before = (self.run_dir / "manifest.json").read_text(encoding="utf-8")
+        self.patch("setup_logging", lambda run_dir: None)
+        rendered = []
+        self.patch("finish", lambda ctx: rendered.append(ctx) or (0, None))
+        args = make_args(render_only=True, run_dir=self.run_dir)
+        tenant = {"key": "b", "name": "B", "customer_id": "C_B",
+                  "break_glass": ["bg@b.example"]}
+        self.assertEqual(1, ts.run_tenant(args, tenant))
+        self.assertEqual([], rendered)
+        self.assertEqual(before, (self.run_dir / "manifest.json")
+                         .read_text(encoding="utf-8"))
+        # The control: the run's own tenant still re-renders.
+        self.patch("open_report", lambda report, args: None)
+        self.assertEqual(0, ts.run_tenant(args, dict(tenant, customer_id="C_A")))
+        self.assertEqual(1, len(rendered))
 
     def test_resume_against_the_same_customer_passes(self):
         self.ctx.manifest["meta"]["customer_id"] = "C_OLD"
@@ -3632,9 +3674,53 @@ class TestParseArgsGuards(unittest.TestCase):
     def test_grant_needs_admin(self):
         self.assertRejects(["--grant-temp-access"])
 
+    def test_grant_with_tenants_may_take_admin_from_the_entry(self):
+        args = ts.parse_args(["--all", "--grant-temp-access"])
+        self.assertTrue(args.grant_temp_access)
+
+    def test_tenant_and_all_are_exclusive(self):
+        self.assertRejects(["--tenant", "a", "--all"])
+
+    def test_all_rejects_run_dir_and_compare_with(self):
+        self.assertRejects(["--all", "--run-dir", "x"])
+        self.assertRejects(["--all", "--compare-with", "x"])
+
     def test_skip_tier_parsed(self):
         self.assertEqual([2, 3], ts.parse_args(["--skip-tier", "2,3"]).skip_tier)
         self.assertRejects(["--skip-tier", "three"])
+
+
+class TestPerTenantAdmin(unittest.TestCase):
+    """AUD-10: each tenants.json entry may name its own auditing admin."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.run_dir = Path(self._tmp.name)
+
+    def ctx_for(self, admin, entry):
+        args = make_args(admin=admin)
+        args.tenant_entry = entry
+        return ts.RunContext(self.run_dir, args)
+
+    def test_entry_admin_used_without_flag(self):
+        self.assertEqual("audit@a.example",
+                         self.ctx_for(None, {"admin": "audit@a.example"}).admin)
+
+    def test_flag_wins_over_entry(self):
+        self.assertEqual("admin@example.com",
+                         self.ctx_for("admin@example.com",
+                                      {"admin": "audit@a.example"}).admin)
+
+    def test_grant_without_any_admin_is_refused(self):
+        original = ts.setup_logging
+        ts.setup_logging = lambda run_dir: None
+        self.addCleanup(setattr, ts, "setup_logging", original)
+        args = make_args(admin=None, grant_temp_access=True,
+                         run_dir=self.run_dir)
+        tenant = {"key": "a", "name": "A", "customer_id": "C_A",
+                  "break_glass": []}
+        self.assertEqual(1, ts.run_tenant(args, tenant))
 
 
 class TestPlainLogFile(unittest.TestCase):

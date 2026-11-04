@@ -1046,7 +1046,12 @@ class RunContext:
                 print_warning("manifest.json unreadable; starting a fresh one")
         self.internal_domains: List[str] = self.manifest["meta"].get(
             "internal_domains", [])
-        self.admin: str = args.admin or self.manifest["meta"].get("admin", "")
+        # --admin wins; otherwise the tenants.json entry's own admin, so an
+        # --all run scans each tenant as an account that exists there.
+        self.admin: str = (args.admin
+                           or (getattr(args, "tenant_entry", None) or {}).get(
+                               "admin")
+                           or self.manifest["meta"].get("admin", ""))
         self.failed_scopes: List[str] = []
         self._rows_cache: Dict[str, List[Dict[str, str]]] = {}
         self._policy_cache: Optional[List[Dict]] = None
@@ -1255,26 +1260,22 @@ def preflight(ctx: RunContext, modules: List[Dict]) -> bool:
             ok = False
         else:
             info = parse_info_domain(out)
-            # The raw output also carries per-SKU seat counts; keep it for
-            # the licence-waste check (a second call would be pure waste).
-            (ctx.run_dir / "domaininfo.txt").write_text(out, encoding="utf-8")
             domain = info.get("primary_domain", "?")
             customer = info.get("customer_id", "?")
             saved = ctx.manifest["meta"].get("customer_id")
+            # Both refusals come before anything is written: the directory
+            # must not end up holding the answering tenant's identity or seats.
             if saved and saved != "?" and customer != saved:
                 # --run-dir holds another customer's completed modules, which
                 # a resume would skip and then report as this tenant's.
                 table.append(("Tenant", f"{domain} (customer {customer})",
                               f"NOT {saved} as this run directory holds; "
                               "run aborted"))
-                ctx.manifest["preflight"] = [list(r) for r in table]
-                ctx.save()
+                _print_preflight(table)
                 print_error(f"Wrong run directory: GAM answered for "
                             f"{customer} ({domain}), but {ctx.run_dir} holds "
                             f"a run for {saved}. Use a new --run-dir.")
                 return False
-            ctx.manifest["meta"]["primary_domain"] = domain
-            ctx.manifest["meta"]["customer_id"] = customer
             expected = (getattr(args, "tenant_entry", None) or {}).get(
                 "customer_id")
             if expected and customer != expected:
@@ -1284,11 +1285,15 @@ def preflight(ctx: RunContext, modules: List[Dict]) -> bool:
                 table.append(("Tenant", f"{domain} (customer {customer})",
                               f"NOT {expected} as tenants.json says; run "
                               "aborted"))
-                ctx.manifest["preflight"] = [list(r) for r in table]
-                ctx.save()
+                _print_preflight(table)
                 print_error(f"Wrong tenant: GAM answered for {customer} "
                             f"({domain}), tenants.json expects {expected}.")
                 return False
+            # The raw output also carries per-SKU seat counts; keep it for
+            # the licence-waste check (a second call would be pure waste).
+            (ctx.run_dir / "domaininfo.txt").write_text(out, encoding="utf-8")
+            ctx.manifest["meta"]["primary_domain"] = domain
+            ctx.manifest["meta"]["customer_id"] = customer
             table.append(("Tenant", f"{domain} (customer {customer})",
                           "Confirmed by operator" if not args.yes
                           else "Confirmed via --yes"))
@@ -1387,7 +1392,16 @@ def preflight(ctx: RunContext, modules: List[Dict]) -> bool:
 
     ctx.manifest["preflight"] = [list(row) for row in table]
     ctx.save()
+    _print_preflight(table)
+    return ok
 
+
+def _print_preflight(table: List[Tuple[str, str, str]]) -> None:
+    """Print the preflight table to the console and run log.
+
+    Shared by the normal path and the wrong-tenant refusals, which print the
+    table without saving it into the refused run directory.
+    """
     print_header("PREFLIGHT")
     width = max(len(row[0]) for row in table) + 2
     for check, result, consequence in table:
@@ -1395,7 +1409,6 @@ def preflight(ctx: RunContext, modules: List[Dict]) -> bool:
         if consequence and consequence != "-":
             line += f"  -> {consequence}"
         _emit('info', line)
-    return ok
 
 
 ###############################################################################
@@ -6838,7 +6851,10 @@ def parse_args(argv=None):
         # findings, no coverage table, exit 0 - the one report that says
         # nothing was checked and reads as clean.
         parser.error("--render-only needs --run-dir")
-    if args.grant_temp_access and not args.admin:
+    if args.grant_temp_access and not args.admin and not (
+            args.tenant or args.all):
+        # With --tenant/--all the admin can come from tenants.json instead;
+        # run_tenant refuses a tenant that has neither.
         parser.error("--grant-temp-access needs --admin")
     if args.tenant and args.all:
         parser.error("--tenant and --all are alternatives")
@@ -6941,10 +6957,24 @@ def run_tenant(args, tenant: Optional[Dict]) -> int:
     print_info(f"Run directory: {run_dir}")
 
     ctx = RunContext(run_dir, args)
+    saved = ctx.manifest["meta"].get("customer_id")
+    if (args.render_only and tenant and saved
+            and saved != tenant["customer_id"]):
+        # Preflight's customer check never runs on a re-render; without this
+        # the report would put this tenant's name and break-glass list over
+        # another customer's data, and save them into its manifest.
+        print_error(f"Wrong run directory: {run_dir} holds a run for "
+                    f"{saved}, tenants.json expects {tenant['customer_id']} "
+                    f"for {tenant['key']}.")
+        return 1
     if tenant:
         ctx.manifest["meta"].update(tenant_key=tenant["key"],
                                     tenant_name=tenant["name"],
                                     break_glass=tenant["break_glass"])
+    if args.grant_temp_access and not ctx.admin:
+        print_error("--grant-temp-access needs --admin, or an admin in this "
+                    "tenant's tenants.json entry.")
+        return 1
     modules = selected_modules(args)
 
     if args.render_only:
@@ -6998,6 +7028,11 @@ def main(argv=None):
         return 1
     if args.all:
         chosen = [t for t in tenants.values() if t["enabled"]]
+        if args.admin:
+            print_warning(f"--admin {args.admin} is used for every tenant, "
+                          "overriding each entry's admin; an account that "
+                          "does not exist in a tenant fails its DWD check "
+                          "and Shared Drive scans.")
     elif args.tenant in tenants:
         chosen = [tenants[args.tenant]]
     else:
