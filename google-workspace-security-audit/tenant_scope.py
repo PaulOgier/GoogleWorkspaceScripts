@@ -1964,9 +1964,11 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
                 break
         if done:
             continue
-        if candidates and candidates[0] == admin_lower:
-            # The admin is a member and still failed: a scan failure, which
-            # a grant would not fix.
+        if candidates and candidates[0] == admin_lower \
+                and not ctx.args.grant_temp_access:
+            # The admin was a member and still failed. With the grant flag
+            # the live membership check below decides: the admin may have
+            # been removed since shareddriveacls.csv was read.
             errors += 1
             failed.append(f"{drive_name} ({drive_id})")
             unscanned.append(f"{drive_name} ({drive_id}) - scan failed")

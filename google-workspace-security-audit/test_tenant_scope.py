@@ -3815,6 +3815,36 @@ class TestTempGrantCleanupInterrupted(CtxTestCase):
         self.assertFalse(any("add" in c or "delete" in c for c in calls))
         self.assertIn("membership check failed", note)
 
+    def test_admin_removed_since_acl_read_is_granted(self):
+        """Review 4: the admin listed in shareddriveacls.csv but removed
+        since gets the membership error; the grant path must still run."""
+        self.write_csv("shareddriveacls", "id,permission.emailAddress,"
+                       "permission.role,permission.type\n"
+                       "D1,admin@example.com,organizer,user")
+        self.ctx._rows_cache.clear()
+        gone = (60, "Owner,id,name\n", "User: admin@example.com, Shared "
+                "Drive ID: D1, Print Failed: The attempted action requires "
+                "shared drive membership.\n")
+        calls = []
+
+        def fake(args, **kw):
+            calls.append(args)
+            if "info" in args and "drivefileacl" in args:
+                return 56, "", "Permission ID: x, Does not exist\n"
+            if "add" in args or "delete" in args:
+                fake.granted = "add" in args
+                return 0, "", ""
+            if "D1" in args and not getattr(fake, "granted", False):
+                return gone
+            return 0, "id,name,mimeType,hasAugmentedPermissions\n", ""
+        ts.run_gam = fake
+        ts.collect_sd_external(self.ctx,
+                               ts.MODULE_BY_KEY["shareddrive_external"])
+        self.assertEqual(["add", "delete"],
+                         [c[2] for c in calls if "D1" in c
+                          and c[2] in ("add", "delete")])
+        self.assertEqual([], self.on_disk())
+
     def test_failed_membership_check_never_grants(self):
         """Review of AUD-41: a quota error is not "not a member"."""
         calls, (status, _, note) = self.run_recording(
