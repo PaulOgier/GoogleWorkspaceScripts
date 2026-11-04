@@ -1986,14 +1986,27 @@ def tamingdns_check(check: str, domain: str, timeout: int = 25,
                   if ln.startswith("data:")]
         body = frames[-1] if frames else body
     data = json.loads(body)
-    result = data.get("result", {})
+    # Every shape that is not a verdict comes back as {"error": ...}, which
+    # is what the DoH fallback and the DNS checks test for; a None or a raw
+    # string used to read as a passing check.
+    if not isinstance(data, dict):
+        return {"error": "unexpected reply"}
+    if data.get("error"):
+        return {"error": f"JSON-RPC error: {data['error']}"}
+    result = data.get("result") or {}
     content = result.get("content") or []
-    if content and isinstance(content, list) and "text" in content[0]:
+    text = (content[0].get("text") if content and isinstance(content, list)
+            and isinstance(content[0], dict) else None)
+    if result.get("isError"):
+        return {"error": f"tool error: {text or 'no detail'}"}
+    if text is not None:
         try:
-            return json.loads(content[0]["text"])
+            parsed = json.loads(text)
         except (json.JSONDecodeError, TypeError):
-            return {"raw": content[0]["text"]}
-    return result or None
+            return {"error": f"not a verdict: {str(text)[:200]}"}
+        return parsed if isinstance(parsed, dict) else {
+            "error": f"not a verdict: {str(text)[:200]}"}
+    return result or {"error": "empty result"}
 
 
 def doh_query(name: str, rtype: str, timeout: int = 10) -> List[str]:
@@ -2084,6 +2097,13 @@ def collect_dns(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
         return "error", 0, "every DNS check failed on both paths"
     if dead:
         return "partial", len(results), f"checks failed for {', '.join(dead)}"
+    # One errored check (say DMARC rate limited) cannot be judged, so the
+    # DNS checks must not be listed clean for it.
+    some = [d for d, e in results.items()
+            if any("error" in (v or {}) for v in e.get("checks", {}).values())]
+    if some:
+        return "partial", len(results), (f"some checks failed for "
+                                         f"{', '.join(some)}")
     return "ok", len(results), ""
 
 

@@ -522,7 +522,10 @@ the run did not finish, or a module behind a critical check failed.
 Per domain, MX/SPF/DKIM/DMARC are checked through
 [tamingdns.com](https://tamingdns.com). If it is unreachable, the module
 falls back to dns.google with presence-only checks, and the report says
-which path ran.
+which path ran. An error reply from tamingdns counts as a failed check, never
+a pass: when every check for a domain errors the domain falls back to
+dns.google, and when only some do, the DNS module is marked partial and the
+DNS checks are not listed as clean.
 
 ### Things the report states rather than hides
 

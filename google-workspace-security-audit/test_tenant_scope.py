@@ -3300,6 +3300,69 @@ class TestCollectDnsStatus(CtxTestCase):
         self.assertEqual(["example.com", "alias.example.com"], list(data))
 
 
+class TestTamingdnsErrorShapes(unittest.TestCase):
+    """AUD-14: an error reply must read as an error, never as a pass."""
+
+    def reply(self, payload):
+        import io
+        original = ts.urllib.request.urlopen
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+        ts.urllib.request.urlopen = lambda req, timeout=0: Resp(
+            json.dumps(payload).encode("utf-8"))
+        try:
+            return ts.tamingdns_check("check_dmarc", "example.com")
+        finally:
+            ts.urllib.request.urlopen = original
+
+    def test_error_shapes(self):
+        for payload in (
+                {"jsonrpc": "2.0", "id": 1,
+                 "error": {"code": -32000, "message": "rate limited"}},
+                {"result": {"isError": True, "content": [
+                    {"type": "text", "text": "Too many requests"}]}},
+                {"result": {"content": [{"type": "text", "text": "oops"}]}},
+                {"result": {}}, {"result": None}):
+            with self.subTest(payload=payload):
+                result = self.reply(payload)
+                self.assertIn("error", result)
+                self.assertFalse(ts._dns_check_failed(result))
+
+    def test_verdict_still_parsed(self):
+        verdict = {"status": "fail", "grade": "F"}
+        result = self.reply({"result": {"content": [
+            {"type": "text", "text": json.dumps(verdict)}]}})
+        self.assertEqual(verdict, result)
+
+    def test_every_check_erroring_falls_back_to_doh(self):
+        original = (ts.tamingdns_check, ts.doh_fallback)
+        ts.tamingdns_check = lambda *a, **k: self.reply(
+            {"error": {"message": "rate limited"}})
+        ts.doh_fallback = lambda d: {"path": "doh", "checks": {}}
+        try:
+            self.assertEqual("doh", ts._dns_domain("example.com", False)["path"])
+        finally:
+            ts.tamingdns_check, ts.doh_fallback = original
+
+
+class TestCollectDnsOneCheckErrored(CtxTestCase):
+    def test_one_errored_check_is_partial(self):
+        original = ts._dns_domain
+        ts._dns_domain = lambda d, fb: {"path": "tamingdns", "checks": {
+            "mx": {"status": "pass"}, "dmarc": {"error": "rate limited"}}}
+        try:
+            status, _, note = ts.collect_dns(self.ctx, ts.MODULE_BY_KEY["dns"])
+        finally:
+            ts._dns_domain = original
+        self.assertEqual("partial", status)
+        self.assertIn("some checks failed", note)
+
+
 class TestCollectOrdering(CtxTestCase):
     """domains/users first, then tenant-level prints together, then the
     per-mailbox scans one at a time - and a resumed partial is not re-run."""
