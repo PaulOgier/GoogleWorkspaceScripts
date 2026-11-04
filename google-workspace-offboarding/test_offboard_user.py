@@ -487,6 +487,16 @@ class TestDestinationPreflight(OffboardTestCase):
                 offb.preflight_destinations(args, source=U)
         self.assertEqual(cm.exception.code, 2)
 
+    def test_unreadable_alias_list_refuses_instead_of_assuming_none(self):
+        """OFF-14: a failed alias read returned [], and the guard then only
+        compared the literal address."""
+        args = _Args(all_transfer_to="l.old@yourdomain.com")
+        fake = FakeGam([(("print", "aliases"), (False, "timeout"))])
+        with gam(fake), mock.patch.object(offb, "validate_destination", return_value=True):
+            with self.assertRaises(SystemExit) as cm:
+                offb.preflight_destinations(args, source=U)
+        self.assertEqual(cm.exception.code, 2)
+
     def test_alias_lookup_is_skipped_when_nothing_is_targeted(self):
         """Was B10_7."""
         args = _Args(no_drive=True, no_email=True, no_alias=True,
@@ -1254,6 +1264,14 @@ class TestAliases(OffboardTestCase):
         self.assertFalse(offb.summary_errors)
         self.assertTrue(any(second in s and "interrupted" in s
                             for s in offb.summary_skipped), offb.summary_skipped)
+
+    def test_unreadable_alias_list_is_an_error_not_no_aliases(self):
+        """OFF-14: a failed read reported "No aliases to transfer"."""
+        fake = FakeGam([(("print", "aliases"), (False, "timeout"))])
+        with gam(fake):
+            offb.transfer_aliases(U, D, dry_run=False)
+        self.assertNotIn("No aliases to transfer", self.actions())
+        self.assertTrue(any("could not be read" in e for e in offb.summary_errors))
 
     def test_no_aliases_from_captured_output(self):
         fake = FakeGam([(("print", "aliases"),

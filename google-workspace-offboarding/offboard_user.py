@@ -495,7 +495,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Set
 import shutil
 
 
@@ -1529,7 +1529,11 @@ def preflight_destinations(args, source: Optional[str] = None) -> Dict[str, Opti
     # mailbox, so a literal comparison misses it — and the alias is the more
     # plausible mis-pick, being the address the operator was just looking at.
     if source and any(resolved.values()):
-        same_account = {source.lower()} | {a.lower() for a in _list_aliases(source)}
+        same_account = _same_account(source)
+        if same_account is None:
+            print_error(f"Could not read the aliases of {source}, so cannot rule "
+                        f"out that a destination is one of them. Re-run.")
+            sys.exit(2)
         self_targeted = sorted({n for n, d in resolved.items()
                                 if d and d.lower() in same_account})
         if self_targeted:
@@ -1930,8 +1934,11 @@ def _plan_email(question: str, allow_group: bool = False,
             print_warning("Destination did not validate — enter another.")
             continue
         if source:
-            same_account = ({source.lower()}
-                            | {a.lower() for a in _list_aliases(source)})
+            same_account = _same_account(source)
+            if same_account is None:
+                print_error(f"Could not read the aliases of {source} to check "
+                            f"{email} is not one of them. Enter it again to retry.")
+                continue
             if email.lower() in same_account:
                 print_error(
                     f"{email} is the account being offboarded ({source}). "
@@ -2940,8 +2947,19 @@ def transfer_drive(source: str, destination: str, dry_run: bool):
         summary_error(f"Drive transfer exception: {e}")
 
 
-def _list_aliases(source: str) -> List[str]:
-    """Return the source user's alias addresses from GAM's aliases CSV."""
+def _same_account(source: str) -> Optional[Set[str]]:
+    """The leaver's address and aliases, lower-cased; None if the alias list
+    could not be read, which a self-transfer guard must treat as unknown."""
+    aliases = _list_aliases(source)
+    if aliases is None:
+        return None
+    return {source.lower()} | {a.lower() for a in aliases}
+
+
+def _list_aliases(source: str) -> Optional[List[str]]:
+    """Return the source user's alias addresses from GAM's aliases CSV, or
+    None when the read failed: an unreadable list is unknown, not empty
+    (OFF-14)."""
     success, output = run_gam(
         ["print", "aliases", "user", source],
         dry_run=False,
@@ -2949,8 +2967,10 @@ def _list_aliases(source: str) -> List[str]:
         timeout=60,
         stdout_only=True
     )
+    if not success:
+        return None
     aliases: List[str] = []
-    if success and output.strip():
+    if output.strip():
         reader = csv.DictReader(io.StringIO(output.strip()))
         for row in reader:
             value = (row.get("Alias") or "").strip()
@@ -2976,6 +2996,10 @@ def transfer_aliases(source: str, destination: str, dry_run: bool):
     print_header("ALIAS TRANSFER")
 
     aliases = _list_aliases(source)
+    if aliases is None:
+        summary_error(f"Alias list of {source} could not be read; check and move "
+                      f"aliases by hand: gam print aliases user {source}")
+        return
     if not aliases:
         print_success("No aliases to transfer.")
         summary_action("No aliases to transfer")
@@ -5241,7 +5265,11 @@ def main():
         # preflight_destinations() is what refuses the leaver (or one of
         # their aliases) as a destination; this mode skips it, so refuse here
         # or the mailbox restores into itself under new labels.
-        same_account = {user_email.lower()} | {a.lower() for a in _list_aliases(user_email)}
+        same_account = _same_account(user_email)
+        if same_account is None:
+            print_error(f"Could not read the aliases of {user_email} to rule out "
+                        f"that {email_dest} is one of them. Re-run.")
+            sys.exit(2)
         if email_dest.lower() in same_account:
             print_error(f"Restore destination {email_dest} is the account being offboarded.")
             sys.exit(2)
