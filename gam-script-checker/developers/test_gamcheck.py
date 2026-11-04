@@ -685,6 +685,11 @@ AUDIT_2026_11 += [
     ('gam info domain\nx=$((1<<2)); cat <<EOF\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\nfor ((i=0;i<<1;i++)); do cat <<EOF\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\ncat <<E`x`\nE\nit\'s\nE`x`\ngam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    # gamx is GAM7 under another name (CHK-20); todrive as a query value is not the upload option (CHK-21)
+    ('gamx info domain\ngamx delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam print users query "todrive"', 'shell', g.READ, 'exact'),
+    ('gam print users todrive', 'shell', g.CHANGES, 'exact'),
+    ('gam print users query "isSuspended=False" todrive', 'shell', g.CHANGES, 'exact'),
     # CHK-16: python3 - <<'EOF' runs the heredoc as Python, so the Python reader reads it
     ('gam info domain\npython3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
     ('gam info domain\nsudo /usr/bin/python3 -u <<EOF\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
@@ -695,6 +700,10 @@ AUDIT_2026_11 += [
     ('gam info domain\npython3 -mjson.tool <<EOF\n{"a": "$(gam delete user bob@example.com)"}\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\npython3 - <<\'A\'; cat <<\'B\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nA\ngam print users\nB', 'shell', g.DESTRUCTIVE, 'floor'),
     ('gam info domain\ncat <<\'A\'; python3 - <<\'B\'\nit\'s text\nA\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nB', 'shell', g.DESTRUCTIVE, 'floor'),
+    # python -x skips a line and a later < replaces the heredoc: CANNOT TELL; a pipe is still reported beside it
+    ('gam info domain\npython3 -x - <<\'EOF\'\n"""\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\npython3 - <<\'EOF\' <prog.py\nprint(1)\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\ncat x | python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
     # a heredoc that never finds its end marker was probably misread, so the script cannot be read as safe
     ('gam info domain\ncat <<E`x y`\nbody\nE`x y`\nx="a\nb # c"; gam print users', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\ncat <<E`x`\nE\nx="a\nE`x`\nmsg=\'a # b\'; gam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),

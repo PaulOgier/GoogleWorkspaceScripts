@@ -255,7 +255,7 @@ OBJECT_LABEL = {
     'chromebrowser': 'Chrome browsers',
 }
 
-GAM_NAMES = {'gam', 'gam7', 'gamadv', 'gamadv-xtd3', 'gam.py'}
+GAM_NAMES = {'gam', 'gam7', 'gamx', 'gamadv', 'gamadv-xtd3', 'gam.py'}  # gamx: the name some installs give GAM7 (CHK-20)
 ECHO_WORDS = {'echo', 'printf', 'write-host', 'write-output', 'rem', 'print', 'cat', 'grep', 'findstr', 'which',
               'where', 'type', 'man', 'select-string', 'get-command'}
 PREFIX_WORDS = {'sudo', 'time', 'exec', 'nohup', 'env', 'command', 'call', 'start', 'then', 'do', 'else', '{',
@@ -263,6 +263,8 @@ PREFIX_WORDS = {'sudo', 'time', 'exec', 'nohup', 'env', 'command', 'call', 'star
                 'python', 'python3', 'py', 'cmd', 'powershell', 'pwsh', 'start-process', 'ionice', 'chrt', 'doas', 'runuser'}
 # A paste that runs a script (python3 audit.py, bash ./offboard.sh) holds no gam
 # commands itself; the script it names is checked instead when it exists here.
+# python options that leave a program read from stdin as written (-x, for one, skips its first line)
+PYTHON_PLAIN_OPTIONS = {'-', '-u', '-B', '-E', '-I', '-s', '-S', '-O', '-OO', '-q', '-v', '-b', '-bb', '-d', '-P', '-R'}
 SCRIPT_RUNNERS = {'python', 'python3', 'py', 'bash', 'sh', 'zsh', 'pwsh', 'powershell', 'source', '.', 'call'}
 SCRIPT_EXTS = ('.py', '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd')
 SEPARATORS = {';', '&&', '||', '|', '&', '(', ')', ';;', '|&', '{', '}'}
@@ -843,7 +845,7 @@ class GamParser:
                 notes.append(f'sends {chosen} to the device')
             else:
                 level, notes = DESTRUCTIVE, notes + ['device command not readable; treated as a wipe']
-        if 'todrive' in words:
+        if 'todrive' in self._flags(rest, positional=False):  # query "todrive" is a search value, not the option (CHK-21)
             level = max(level, CHANGES)
             notes.append('uploads the output to a Google Sheet in your Drive')
         if verb in ('update', 'create', 'add') and obj == 'user':
@@ -1548,6 +1550,17 @@ class Checker:
                 seg = self._drop_redirects(seg)
                 at = self._gam_position(seg, gam_vars, wrappers)
                 if at is None:
+                    # python3 - <<'EOF' runs that heredoc as a program, so it is also read as Python (CHK-16);
+                    # the shell reader still reads the body, since an unquoted <<EOF runs $(...) in it first
+                    doc = self._python_heredoc(segments[i], lines.bodies.get(n),
+                                               sum(t in ('<<', '<<-') for s in segments[:i] for t in s))
+                    if isinstance(doc, str):
+                        findings.append(Finding(ctx.file, n, UNKNOWN, doc, short(seg), note='check the Python it runs on its own'))
+                    elif doc:
+                        for f in self.check_text('\n'.join(t for _, t in doc) + '\n', ctx.file, 'python',
+                                                 ctx.base_dirs, ctx.depth + 1):
+                            f.line = doc[f.line - 1][0] if 0 < f.line <= len(doc) else n
+                            findings.append(f)
                     if seg and seg[0].lower().strip('`"\'') in ECHO_WORDS and lang in ('shell', 'gambatch', 'powershell'):
                         # echo "$(gam delete ...)" prints text but the shell runs the substitution first
                         for inner in self._substitutions(body, lang):
@@ -1561,15 +1574,6 @@ class Checker:
                                                 short(seg), note='handed to another program (bash -c, ssh, Start-Process); check the inner command on its own'))
                     elif (script := self._script_path(seg)) is not None:
                         findings.extend(ctx.follow_script(script, n, short(seg), seg))
-                    elif n in lines.bodies and self._stdin_python(seg) and \
-                            (k := sum(t in ('<<', '<<-') for s in segments[:i + 1] for t in s)) and k <= len(lines.bodies[n]):
-                        # python3 - <<'EOF' runs that heredoc as a program, so it is also read as Python (CHK-16);
-                        # the shell reader still reads the body, since an unquoted <<EOF runs $(...) in it first
-                        doc = lines.bodies[n][k - 1]
-                        for f in self.check_text('\n'.join(t for _, t in doc) + '\n', ctx.file, 'python',
-                                                 ctx.base_dirs, ctx.depth + 1):
-                            f.line = doc[f.line - 1][0] if 0 < f.line <= len(doc) else n
-                            findings.append(f)
                     elif (runner := self._piped_shell(seg, seps[i - 1] if i else '')) is not None:
                         findings.append(Finding(ctx.file, n, UNKNOWN, f'runs the text piped into {runner} as code',
                                                 short(seg), note='check the piped text on its own'))
@@ -1722,18 +1726,30 @@ class Checker:
             return tok
         return None
 
-    @staticmethod
-    def _stdin_python(seg):
-        """True when the segment is python reading its program from standard input (python3 -, python3 -u)."""
+    def _python_heredoc(self, raw, docs, before):
+        """For python reading its program from a heredoc on this segment: that heredoc's body lines;
+        a reason string when the checker cannot tell what it runs; else None.
+
+        raw is the segment with its redirects, docs the line's heredoc bodies, before the number of
+        heredocs earlier on the line. Only options that leave the source as read are followed:
+        -x skips the first line, and a later < or <<< replaces the heredoc as stdin.
+        """
+        seg = self._drop_redirects(raw)
         k = 0
         while k < len(seg) and (re.fullmatch(r'[A-Za-z_]\w*=.*', seg[k]) or seg[k].lower() in PREFIX_WORDS - SCRIPT_RUNNERS):
             k += 1
-        if k >= len(seg) or not re.fullmatch(r'(?i)python[\d.]*|py', re.split(r'[\\/]', seg[k].strip('`"\''))[-1].removesuffix('.exe')):
-            return False
+        own = [j for j, t in enumerate(raw) if t in ('<<', '<<-')]
+        if not docs or not own or k >= len(seg) or \
+                not re.fullmatch(r'(?i)python[\d.]*|py', re.split(r'[\\/]', seg[k].strip('`"\''))[-1].removesuffix('.exe')):
+            return None
         args = seg[k + 1:]
-        # -c CODE and -m MOD, also glued (-mjson.tool) or in a cluster (-uc), mean the program is not stdin
-        return all(t.startswith('-') for t in args) and \
-            not any(t != '-' and not t.startswith('--') and re.search(r'[cm]', t[1:]) for t in args)
+        if any(not t.startswith('-') or (t != '-' and not t.startswith('--') and re.search(r'[cm]', t[1:])) for t in args):
+            return None  # a script file, -c CODE or -m MOD (also glued: -mjson.tool): not the heredoc
+        if any(re.fullmatch(r'0?<&?|<<<', t) for t in raw[own[-1] + 1:]):
+            return 'python reads its program from a later redirect, not the heredoc'
+        if any(t not in PYTHON_PLAIN_OPTIONS for t in args):
+            return f'python runs the heredoc with options the checker does not follow ({" ".join(args)})'
+        return docs[before + len(own) - 1] if before + len(own) <= len(docs) else None
 
     @staticmethod
     def _drop_redirects(seg):
@@ -2718,7 +2734,8 @@ def main(argv=None):
                 findings.append(Finding(s, 0, UNKNOWN, 'the paste contains curly quotes',
                                         note='web pages turn " into curly quotes; gam will reject them, retype them as straight quotes'))
         elif not Path(s).is_file():
-            print(f'gamcheck: {s}: file not found', file=sys.stderr)
+            what = 'is a folder, not a script; name the script files in it' if Path(s).is_dir() else 'file not found'
+            print(f'gamcheck: {s}: {what}', file=sys.stderr)
             worst = max(worst, UNKNOWN)
             continue
         else:
