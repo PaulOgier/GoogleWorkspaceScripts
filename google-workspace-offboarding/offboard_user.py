@@ -1137,6 +1137,7 @@ def _stream_process(cmd: List[str], on_line, env: Optional[dict] = None) -> int:
             buffer = buffer[idx + 1:]
             if line:
                 on_line(line)
+    buffer += decoder.decode(b"", final=True)
     if buffer.strip():
         on_line(buffer.rstrip())
     proc.wait()
@@ -1957,7 +1958,8 @@ def _plan_email(question: str, allow_group: bool = False,
             print_warning("Destination did not validate — enter another.")
             continue
         if source:
-            same_account = _same_account(source)
+            # The operator retries a failed read here, so it is not a run error.
+            same_account = _same_account(source, suppress_summary_error=True)
             if same_account is None:
                 print_error(f"Could not read the aliases of {source} to check "
                             f"{email} is not one of them. Enter it again to retry.")
@@ -2997,16 +2999,18 @@ def transfer_drive(source: str, destination: str, dry_run: bool):
         summary_error(f"Drive transfer exception: {e}")
 
 
-def _same_account(source: str) -> Optional[Set[str]]:
+def _same_account(source: str, suppress_summary_error: bool = False
+                  ) -> Optional[Set[str]]:
     """The leaver's address and aliases, lower-cased; None if the alias list
     could not be read, which a self-transfer guard must treat as unknown."""
-    aliases = _list_aliases(source)
+    aliases = _list_aliases(source, suppress_summary_error)
     if aliases is None:
         return None
     return {source.lower()} | {a.lower() for a in aliases}
 
 
-def _list_aliases(source: str) -> Optional[List[str]]:
+def _list_aliases(source: str, suppress_summary_error: bool = False
+                  ) -> Optional[List[str]]:
     """Return the source user's alias addresses from GAM's aliases CSV, or
     None when the read failed: an unreadable list is unknown, not empty
     (OFF-14)."""
@@ -3015,7 +3019,8 @@ def _list_aliases(source: str) -> Optional[List[str]]:
         dry_run=False,
         capture_output=True,
         timeout=60,
-        stdout_only=True
+        stdout_only=True,
+        suppress_summary_error=suppress_summary_error,
     )
     if not success:
         return None
@@ -3074,11 +3079,18 @@ def transfer_aliases(source: str, destination: str, dry_run: bool):
         if shutdown_requested:
             untouched = aliases[index:]
             break
-        ok, _ = run_gam(["delete", "alias", alias], dry_run=False,
-                        capture_output=True)
-        if not ok:
+        deleted, out = run_gam(["delete", "alias", alias], dry_run=False,
+                               capture_output=True)
+        ok = deleted
+        if not ok and out == "Shutdown requested":
+            # Refused before it ran: nothing was touched.
+            untouched = aliases[index:]
+            break
+        if not ok and not shutdown_requested:
             failed.append(alias)
             continue
+        # A Ctrl+C reaches the gam child too, so a failed delete during one
+        # may still have landed at Google: re-create to be safe.
         # Retry the create while the deletion propagates ("Duplicate").
         created = False
         deadline = time.time() + 60
@@ -3099,6 +3111,14 @@ def transfer_aliases(source: str, destination: str, dry_run: bool):
             time.sleep(5)
         if created:
             moved.append(alias)
+        elif not deleted:
+            # The interrupted delete may not have landed; do not claim it did.
+            failed.append(alias)
+            print_error(
+                f"Alias {alias}: the delete was interrupted and the alias could "
+                f"not be created on {destination}. Check where it is with: "
+                f"gam info alias {alias}"
+            )
         else:
             failed.append(alias)
             print_error(
@@ -5684,7 +5704,8 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
         else:
             summary_skip(f"{label} (declined)")
 
-    if "Drive backup (rclone)" in transfer_failures:
+    if ("Drive backup (rclone)" in transfer_failures and not args.no_drive
+            and plan["drive"]["do"]):
         # After `transfer drive` the leaver owns nothing, so a failed backup
         # could never be re-run against them. Hold the move instead (OFF-08).
         print_warning("Drive transfer HELD: the Drive backup failed, so the files "
@@ -5728,6 +5749,7 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
         run_phase("Auto-reply", set_auto_reply, user_email, dry_run)
     else:
         summary_skip("Auto-reply (declined)")
+    _abort_if_shutdown(dry_run, "forwarding and auto-reply")
 
     # ---- Licence removal (after all transfers so licence is intact for
     # Drive/Gmail API access during data operations) ------------------------

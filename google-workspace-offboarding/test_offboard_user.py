@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-SCRIPT_PATH = Path(__file__).parent / "offboard_user.py"
+SCRIPT_PATH = Path(__file__).resolve().parent / "offboard_user.py"
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 # Import offboard_user.py as a module despite spaces in the folder path.
@@ -561,6 +561,19 @@ class TestDestinationPreflight(OffboardTestCase):
         self.assertEqual(got, D)
         self.assertEqual(offb.summary_errors, [])
         self.assertEqual(offb.exit_code, 0)
+
+    def test_interactive_alias_read_failure_records_no_run_error(self):
+        """Review of OFF-05: a failed alias read at the re-ask that the retry
+        fixes must not leave exit 1."""
+        reads = iter([None, []])
+        with mock.patch.object(offb, "prompt_email", side_effect=[D, D]), \
+             mock.patch.object(offb, "validate_destination", return_value=True), \
+             mock.patch.object(offb, "_list_aliases",
+                               side_effect=lambda *a, **k: next(reads)) as la:
+            got = offb._plan_email("Drive dest", source=U)
+        self.assertEqual(got, D)
+        self.assertTrue(all(c.args[1] or c.kwargs.get("suppress_summary_error")
+                            for c in la.call_args_list), la.call_args_list)
 
     def test_mailbox_probe_not_run_for_non_email_prompts(self):
         """Was B20_4."""
@@ -1289,6 +1302,32 @@ class TestAliases(OffboardTestCase):
             offb.transfer_aliases(U, D, dry_run=False)
         self.assertNotIn("No aliases to transfer", self.actions())
         self.assertTrue(any("could not be read" in e for e in offb.summary_errors))
+
+    def test_delete_killed_by_ctrl_c_still_attempts_the_create(self):
+        """Review of OFF-01: Ctrl+C reaches the gam child, so the delete can
+        land at Google and still report failure."""
+        def delete(_args, _kw):
+            offb.shutdown_requested = True
+            return False, "KeyboardInterrupt"
+        fake = FakeGam([(("print", "aliases"), (True, self.ALIAS_CSV)),
+                        (("delete", "alias"), delete),
+                        (("create", "alias"), (True, "Created"))])
+        with gam(fake), clocked():
+            offb.transfer_aliases(U, D, dry_run=False)
+        self.assertIn(self.ALIAS, self.actions())
+        self.assertFalse(offb.summary_errors)
+
+    def test_delete_refused_by_the_shutdown_flag_is_untouched_not_failed(self):
+        def flag_then_refuse(_args, _kw):
+            offb.shutdown_requested = True
+            return False, "Shutdown requested"
+        fake = FakeGam([(("print", "aliases"), (True, self.ALIAS_CSV)),
+                        (("delete", "alias"), flag_then_refuse)])
+        with gam(fake), clocked():
+            offb.transfer_aliases(U, D, dry_run=False)
+        self.assertEqual(fake.matching("create", "alias"), [])
+        self.assertFalse(offb.summary_errors)
+        self.assertTrue(any("interrupted" in k for k in offb.summary_skipped))
 
     def test_no_aliases_from_captured_output(self):
         fake = FakeGam([(("print", "aliases"),

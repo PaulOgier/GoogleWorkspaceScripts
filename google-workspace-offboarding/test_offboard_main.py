@@ -486,6 +486,27 @@ class TestContainment(MainFlowCase):
         self.assertEqual(self.gyb_calls, [])
 
 
+class TestLateInterrupt(MainFlowCase):
+
+    def test_ctrl_c_during_auto_reply_exits_130_not_failed_licences(self):
+        """Review of OFF-03: a Ctrl+C after the calendar phase left licence
+        removal and suspension refused and recorded as failures, exit 1."""
+        gam = ScriptedGam()
+
+        def interrupt_on_vacation(args):
+            if "vacation" in args:
+                offb.shutdown_requested = True
+        gam.on_call = interrupt_on_vacation
+        gam.rule(("user", LEAVER, "show", "forwardingaddresses"),
+                 (True, f"  Forwarding Address: {SUCCESSOR}, Verification Status: accepted"))
+        code = self.run_main(gam, "--doit", "--force", "--user", LEAVER,
+                             "--all-transfer-to", SUCCESSOR)
+        self.assertEqual(code, offb.EXIT_INTERRUPTED, offb.summary_errors)
+        self.assertTrue(any("INTERRUPTED" in w and "auto-reply" in w
+                            for w in offb.summary_warnings), offb.summary_warnings)
+        self.assertFalse(offb.summary_errors)
+
+
 class TestDriveBackupHold(MainFlowCase):
 
     def test_failed_drive_backup_holds_the_drive_transfer(self):
@@ -511,6 +532,17 @@ class TestDriveBackupHold(MainFlowCase):
         self.assertIn(f"update user {LEAVER} suspended on", gam.argv())
         self.assertEqual(code, 1)
 
+
+    def test_failed_backup_on_an_archive_only_run_claims_no_held_transfer(self):
+        """Review of OFF-08: --no-transfer --backup-drive printed a hold for a
+        transfer that was never planned."""
+        gam = ScriptedGam()
+        with mock.patch.object(offb, "backup_drive_rclone",
+                               lambda *a, **k: offb.summary_error("Drive backup failed")):
+            self.run_main(gam, "--doit", "--force", "--user", LEAVER,
+                          "--backup-drive", "--no-transfer")
+        self.assertFalse(any("Drive transfer (held" in k for k in offb.summary_skipped),
+                         offb.summary_skipped)
 
 class TestEmailArchive(MainFlowCase):
 
