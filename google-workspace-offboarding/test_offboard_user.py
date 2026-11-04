@@ -1316,6 +1316,9 @@ class TestAliases(OffboardTestCase):
             offb.transfer_aliases(U, D, dry_run=False)
         self.assertIn(self.ALIAS, self.actions())
         self.assertFalse(offb.summary_errors)
+        # run_gam itself records the failed delete unless told not to.
+        self.assertTrue(all(kw.get("suppress_summary_error")
+                            for args, kw in fake.calls if args[:2] == ["delete", "alias"]))
 
     def test_delete_refused_by_the_shutdown_flag_is_untouched_not_failed(self):
         def flag_then_refuse(_args, _kw):
@@ -1349,6 +1352,19 @@ class TestDeleteUser(OffboardTestCase):
             offb.delete_user(U, dry_run=False)
         self.assertFalse(offb.summary_errors)
         self.assertTrue(any("cancelled" in w for w in offb.summary_warnings))
+
+    def test_ctrl_c_mid_delete_reports_unknown_not_still_exists(self):
+        """Review: a Ctrl+C reaching the gam child can land the delete."""
+        def delete(_args, _kw):
+            offb.shutdown_requested = True
+            return False, "KeyboardInterrupt"
+        fake = FakeGam([(("delete", "user"), delete)])
+        with gam(fake):
+            offb.delete_user(U, dry_run=False)
+        self.assertTrue(any("state unknown" in w for w in offb.summary_warnings),
+                        offb.summary_warnings)
+        self.assertFalse(any("still exists" in m for m in
+                             offb.summary_warnings + offb.summary_errors))
 
 
 class TestStreamProcess(OffboardTestCase):

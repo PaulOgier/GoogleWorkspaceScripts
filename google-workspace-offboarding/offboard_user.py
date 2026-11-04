@@ -3080,7 +3080,7 @@ def transfer_aliases(source: str, destination: str, dry_run: bool):
             untouched = aliases[index:]
             break
         deleted, out = run_gam(["delete", "alias", alias], dry_run=False,
-                               capture_output=True)
+                               capture_output=True, suppress_summary_error=True)
         ok = deleted
         if not ok and out == "Shutdown requested":
             # Refused before it ran: nothing was touched.
@@ -3831,7 +3831,7 @@ def migrate_email(source: str, destination: str, dry_run: bool, strip_labels: bo
                 print_error("Backup failed verification; restore skipped. "
                             "Re-run to fetch the missing messages.")
                 return
-        if archive_note:
+        if archive_note and not dry_run:
             # --backup-email is served by this backup; claim it only now that
             # it exists and verified (OFF-17).
             summary_action(f"Email archive: covered by the migration's retained "
@@ -4731,15 +4731,21 @@ def delete_user(email: str, dry_run: bool):
     print_error(f"User: {email}")
     print_error("Irreversible after 20-day recovery window.")
 
-    ok, _ = run_gam(
+    ok, out = run_gam(
         ["delete", "user", email],
         dry_run=dry_run
     )
     if ok:
         summary_action(f"USER DELETED: {email}")
-    elif shutdown_requested:
+    elif out == "Shutdown requested":
         print_warning(f"Deletion CANCELLED by Ctrl+C: {email} still exists.")
         summary_warning(f"Deletion cancelled (Ctrl+C or SIGTERM): {email} still exists")
+    elif shutdown_requested:
+        # The Ctrl+C reached the gam child, so the delete may have landed.
+        print_warning(f"Deletion INTERRUPTED by Ctrl+C: {email} may or may not "
+                      f"be deleted. Check the Admin console before re-running.")
+        summary_warning(f"Deletion interrupted (Ctrl+C or SIGTERM): {email} "
+                        f"state unknown, check the Admin console")
     else:
         print_error(
             f"CRITICAL: Deletion FAILED — {email} still exists. "
@@ -5652,6 +5658,7 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
         run_phase("Suspension", suspend_user, user_email, dry_run, bypass_shutdown=True)
         _abort_if_shutdown(dry_run, "suspension, before deletion")
         run_phase("User deletion", delete_user, user_email, dry_run)
+        _abort_if_shutdown(dry_run, "user deletion")
         return finish_run(dry_run)
 
     # ---- Devices, groups, delegates ---------------------------------------
@@ -5776,6 +5783,10 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
         run_phase("Licence removal", remove_licences, user_email, dry_run,
                   cached_licences=cached_licences)
 
+    if not force_suspend:
+        # A forced suspension still runs after Ctrl+C; any other is refused.
+        _abort_if_shutdown(dry_run, "licence removal")
+
     # ---- Suspension (always last) ------------------------------------------
     # If we temporarily unsuspended an already-suspended user at the start of
     # the run, we promised to re-suspend at the end. Honour that contract:
@@ -5819,6 +5830,7 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
                   bypass_shutdown=force_suspend)
     else:
         summary_skip("Suspension (declined)")
+    _abort_if_shutdown(dry_run, "suspension")
 
     code = finish_run(dry_run)
 

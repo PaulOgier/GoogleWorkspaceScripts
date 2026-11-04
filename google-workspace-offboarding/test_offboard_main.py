@@ -507,6 +507,34 @@ class TestLateInterrupt(MainFlowCase):
         self.assertFalse(offb.summary_errors)
 
 
+    def test_ctrl_c_during_licence_removal_exits_130_not_failed_suspension(self):
+        """Review: the refused suspension was recorded as a failure, exit 1."""
+        gam = ScriptedGam()
+
+        def interrupt_on_licence(args):
+            if args[:2] == ["user", LEAVER] and "license" in args:
+                offb.shutdown_requested = True
+        gam.on_call = interrupt_on_licence
+        code = self.run_main(gam, "--doit", "--force", "--no-transfer", "--user", LEAVER)
+        self.assertEqual(code, offb.EXIT_INTERRUPTED, offb.summary_errors)
+        self.assertTrue(any("INTERRUPTED" in w and "licence removal" in w
+                            for w in offb.summary_warnings), offb.summary_warnings)
+        self.assertFalse(any("Suspension failed" in e for e in offb.summary_errors))
+
+    def test_ctrl_c_mid_scorched_delete_exits_130(self):
+        gam = ScriptedGam()
+
+        def interrupt_on_delete(args):
+            if args[:2] == ["delete", "user"]:
+                offb.shutdown_requested = True
+        gam.on_call = interrupt_on_delete
+        code = self.run_main(gam, "--doit", "--force", "--scorched-earth",
+                             "--user", LEAVER, inputs=[LEAVER])
+        self.assertEqual(code, offb.EXIT_INTERRUPTED)
+        self.assertTrue(any("INTERRUPTED" in w and "user deletion" in w
+                            for w in offb.summary_warnings), offb.summary_warnings)
+
+
 class TestDriveBackupHold(MainFlowCase):
 
     def test_failed_drive_backup_holds_the_drive_transfer(self):
