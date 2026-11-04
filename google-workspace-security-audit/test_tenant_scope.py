@@ -3090,6 +3090,19 @@ a@example.com,101031,Google Workspace for Education,1010070001,Google Workspace 
         findings = ts.check_classroom_outsiders(self.ctx)
         self.assertEqual("guest@otherschool.org", findings[0].evidence[0]["Member"])
 
+    def test_zero_rows_with_progress_lines_and_exit_60_is_empty(self):
+        """AUD-40: the progress lines made a healthy empty result partial."""
+        original = ts.run_gam
+        ts.run_gam = lambda args, **kw: (
+            60, "Course: A (1), Print 0 Classroom Invitations (1/1)\n"
+                f"{self.INVITES}\n", "")
+        try:
+            status, rows, _ = ts.collect_simple(
+                self.ctx, ts.MODULE_BY_KEY["classroominvitations"])
+        finally:
+            ts.run_gam = original
+        self.assertEqual(("empty", 0), (status, rows))
+
     def test_output_without_header_is_an_error_not_zero(self):
         path = self.run_dir / "classroominvitations.csv"
         path.write_text("Course: A (1), Print 0 Classroom Invitations\n",

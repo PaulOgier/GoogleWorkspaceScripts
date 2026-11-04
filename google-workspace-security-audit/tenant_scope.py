@@ -1557,6 +1557,14 @@ def collect_simple(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
     ctx.stderr_log(mod["key"], err)
     if ctx.args.dry_run:
         return "dry-run", 0, ""
+    header = mod.get("csv_header")
+    if header and not out.startswith(header):
+        # Classroom prints write "Course: X, Print 0 ..." lines to stdout
+        # ahead of the header; left in, an empty result with exit 60 is not
+        # header-only and a healthy tenant reads as partial.
+        at = out.find("\n" + header)
+        if at >= 0:
+            out = out[at + 1:]
     target = ctx.csv_path(mod["key"])
     if out_path is not None and out_path.exists():
         # GAM wrote the CSV itself (redirect). Count it in place: a large
