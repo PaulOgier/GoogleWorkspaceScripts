@@ -2982,6 +2982,11 @@ BEC_WORDS = ("invoice", "payment", "bank", "banking", "remittance", "wire",
              "urgent", "ceo", "password")
 _BEC_WORD_RE = re.compile(
     r"\b(" + "|".join(re.escape(w) for w in BEC_WORDS) + r")\b")
+# Words common in routine filing (account statements, newsletters): with
+# archive alone they are how people file mail, so they need trash or
+# mark-as-read as well. Not yet mirrored in m365_scope.py.
+BEC_WEAK_WORDS = ("account", "statement", "transfer", "urgent")
+_QUERY_FROM_RE = re.compile(r"\bfrom:\(?([^\s()]+@[^\s()]+)", re.IGNORECASE)
 
 
 def suspicious_filter(row: Dict[str, str], internal: Iterable[str]
@@ -3001,14 +3006,16 @@ def suspicious_filter(row: Dict[str, str], internal: Iterable[str]
     if not (trash or archive or markread):
         return None
     text = " ".join(value(c) for c in ("subject", "query")).lower()
-    word = _BEC_WORD_RE.search(text)
-    if word:
-        return f"hides mail about '{word.group(1)}'"
-    sender = value("from")
-    if (trash or markread) and re.fullmatch(r"[^\s@,|()]+@[^\s@,|()]+",
-                                            sender) \
-            and internal and email_domain(sender) not in internal:
-        return f"hides mail from {sender}"
+    for word in _BEC_WORD_RE.finditer(text):
+        if word.group(1) not in BEC_WEAK_WORDS or trash or markread:
+            return f"hides mail about '{word.group(1)}'"
+    # The sender can be in the from column or a from: term of the query.
+    senders = [value("from")] + _QUERY_FROM_RE.findall(value("query"))
+    for sender in senders:
+        if (trash or markread) and re.fullmatch(r"[^\s@,|()]+@[^\s@,|()]+",
+                                                sender) \
+                and internal and email_domain(sender) not in internal:
+            return f"hides mail from {sender}"
     label = value("label").lower()
     if label and (label in BEC_FOLDERS or label in ("rss", "..", ".")
                   or (len(label) <= 2 and not label.isalnum())):

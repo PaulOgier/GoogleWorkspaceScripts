@@ -259,6 +259,32 @@ user@example.com,f1,boss@example.com,team@example.com""")
         self.assertEqual([], self.bec(
             "u@example.com,f1,from boss@example.com,,,,trash,,"))
 
+    def test_bec_query_from_term_is_a_sender(self):
+        """AUD-20: from: inside the query was never read as the sender."""
+        found = self.bec("u@example.com,f1,,,query from:attacker@outlook.com,"
+                         ",trash,,")
+        self.assertEqual("hides mail from attacker@outlook.com",
+                         found[0].evidence[0]["Why"])
+        self.assertEqual([], self.bec(
+            "u@example.com,f1,,,query from:boss@example.com,,trash,,"))
+
+    def test_bec_weak_word_archived_is_clean(self):
+        self.assertEqual([], self.bec(
+            "u@example.com,f1,,subject Your monthly account statement,,"
+            "label Bank,,archive,"))
+        self.assertEqual([], self.bec(
+            "u@example.com,f1,,,query label:account-updates,,,archive,"))
+
+    def test_bec_weak_word_trashed_fires_and_strong_word_archived_fires(self):
+        found = self.bec("u@example.com,f1,,subject account statement,,,"
+                         "trash,,")
+        self.assertEqual("hides mail about 'account'",
+                         found[0].evidence[0]["Why"])
+        found = self.bec("u@example.com,f1,,subject remittance advice,,,,"
+                         "archive,")
+        self.assertEqual("hides mail about 'remittance'",
+                         found[0].evidence[0]["Why"])
+
     def test_bec_blending_label_fires(self):
         found = self.bec(
             "u@example.com,f1,from x@vendor.example.net,,,label RSS Feeds,,archive,")
