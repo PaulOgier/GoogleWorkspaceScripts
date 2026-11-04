@@ -4088,6 +4088,21 @@ staff@example.com,u@example.com,MEMBER,USER""", status="partial")
                          [r["Group"] for r in found["groups-no-owner"].evidence])
 
 
+class TestShareSource(CtxTestCase):
+    def test_shared_drive_rows_cite_their_own_csv(self):
+        """AUD-31."""
+        self.write_csv("shareddrive_external", """id,name,shareddrive.name,permission.type,permission.role,permission.emailAddress,permission.domain
+f1,Plan.docx,Finance,user,reader,x@other.example,""")
+        found = ts.check_external_file_shares(self.ctx)
+        self.assertEqual("shareddrive_external.csv", found[0].source)
+        self.write_csv("mydrive_external", """id,name,owners.0.emailAddress,permission.type,permission.role,permission.emailAddress,permission.domain
+f2,Notes.docx,u@example.com,user,reader,y@other.example,""")
+        self.ctx._rows_cache.clear()
+        found = ts.check_external_file_shares(self.ctx)
+        self.assertEqual("mydrive_external.csv and shareddrive_external.csv",
+                         found[0].source)
+
+
 class TestPerTenantAdmin(unittest.TestCase):
     """AUD-10: each tenants.json entry may name its own auditing admin."""
 

@@ -2552,6 +2552,15 @@ def check_public_files(ctx: RunContext) -> List[Finding]:
     return findings
 
 
+def _share_source(rows: List[Dict[str, str]]) -> str:
+    """The CSV(s) the rows came from: Shared Drive rows are in
+    shareddrive_external.csv, not mydrive_external.csv."""
+    files = {"My Drive": "mydrive_external.csv",
+             "Shared Drives": "shareddrive_external.csv"}
+    return " and ".join(files[w] for w in files
+                        if any(r.get("Where") == w for r in rows))
+
+
 def check_external_file_shares(ctx: RunContext) -> List[Finding]:
     """Files shared to specific external people/groups or whole external
     domains, and external-owned files shared into the tenant.
@@ -2603,7 +2612,7 @@ def check_external_file_shares(ctx: RunContext) -> List[Finding]:
             "gains access automatically.",
             "Replace the domain-wide share with the specific external people "
             "who need the file.",
-            domains, "mydrive_external.csv"))
+            domains, _share_source(domains)))
     if named:
         findings.append(Finding(
             "external-user-shares", "MEDIUM",
@@ -2614,7 +2623,7 @@ def check_external_file_shares(ctx: RunContext) -> List[Finding]:
             "recipient changes role or employer.",
             "Review the list; remove shares whose purpose has passed, and "
             "prefer expiring access for the rest.",
-            named, "mydrive_external.csv"))
+            named, _share_source(named)))
     if audiences:
         findings.append(Finding(
             "target-audience-shares", "INFO",
@@ -2631,7 +2640,7 @@ def check_external_file_shares(ctx: RunContext) -> List[Finding]:
             [{"Audience ID": aid, "Files": str(len(rows)),
               "Example file": rows[0]["File"], "Owner": rows[0]["Owner"]}
              for aid, rows in sorted(audiences.items())],
-            "mydrive_external.csv"))
+            _share_source([e for rows in audiences.values() for e in rows])))
     if _module_usable(ctx, "sharedwithme_external"):
         inbound = [{"File": col(r, "name"),
                     "External owner": col(r, "owners.0.emailAddress"),
