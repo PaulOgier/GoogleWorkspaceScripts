@@ -669,7 +669,8 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 - [x] **CHK-23** `asyncio.create_subprocess_exec("gam", "delete", ...)` and positional `subprocess.Popen("gam", ...)` give "gam with no arguments visible" (`_exec_argv` 1753 reads `args[0]` only). CANNOT TELL, so safe, but easily DESTRUCTIVE.
 - [x] **CHK-24** A directory passed as the script prints "file not found" (exit 2 is right). README table lists `.txt`; `.gam` is also read (1283). Done (`45fe4e7`): a folder says so; the README .gam note is in the docs sweep.
 
-### CHK-T01 `[ ]` Fixtures and tests to add
+### CHK-T01 `[x]` Fixtures and tests to add
+- Closed 2026-11-04 (Paul): the inline tests in `test_gamcheck.py` stand in for separate fixture files.
 - Partly done: every listed case and every later fix is an inline test in `test_gamcheck.py` (`AUDIT_2026_11`, `test_paste`, `test_crash_is_cannot_tell`, timing checks). Open: separate files under `developers/fixtures/`; writing them was blocked by the osh-client-guard hook (file text with lines starting `gam`), so it waits for Paul.
 - `$#` on a line with a command; a comment ending in `\`; a `.txt` batch file with a trailing `\`; `%~dp0gam.exe`; `run = subprocess.run`; `sh -c "$(curl ...)"`; assignment-after-test mode script; a variable-named program; `printf ... | bash` alongside a read-only line; a paste-mode crash regression like `test_crash_is_cannot_tell`; a long-token time bound.
 
