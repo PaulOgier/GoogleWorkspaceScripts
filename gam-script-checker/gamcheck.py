@@ -1763,7 +1763,9 @@ class Checker:
             elif k < len(seg) and seg[k].startswith('`'):
                 # "`which python3`" arrives as one word, `which python3` as two
                 tick = next((j for j in range(k, len(seg)) if seg[j].endswith('`') and (j > k or len(seg[j]) > 1)), k)
-                sub = [w for t in seg[k:tick + 1] for w in t.strip('`').split()]
+                # the words after it too: `true` python3 - expands to nothing, leaving python3 as the program
+                end = next((j for j in range(tick + 1, len(seg)) if seg[j].startswith('-')), len(seg))
+                sub = [w for t in seg[k:end] for w in t.strip('`').split()]
             elif k >= len(seg) or seg[k].startswith('-'):
                 # the outermost $( on the line, so a nested one ($(printf python3; echo $(true))) hides nothing
                 opener = next((j for j in range(len(prev)) if prev[j][-1:] == ['$']), None)
