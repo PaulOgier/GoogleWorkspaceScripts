@@ -1758,11 +1758,15 @@ class Checker:
         # substitution) is CANNOT TELL; only an all-literal one naming another program (`date`) is read on
         if docs and own:
             sub = None
-            if k < len(seg) and seg[k].startswith('`'):
-                tick = next((j for j in range(k + 1, len(seg)) if seg[j].endswith('`')), k)
-                sub = [t.strip('`') for t in seg[k:tick + 1]]
+            if k < len(seg) and '$(' in seg[k]:
+                sub = []  # a quoted substitution kept as one word ("$(which python3)"): nothing to read
+            elif k < len(seg) and seg[k].startswith('`'):
+                # "`which python3`" arrives as one word, `which python3` as two
+                tick = next((j for j in range(k, len(seg)) if seg[j].endswith('`') and (j > k or len(seg[j]) > 1)), k)
+                sub = [w for t in seg[k:tick + 1] for w in t.strip('`').split()]
             elif k >= len(seg) or seg[k].startswith('-'):
-                opener = next((j for j in range(len(prev) - 1, -1, -1) if prev[j][-1:] == ['$']), None)
+                # the outermost $( on the line, so a nested one ($(printf python3; echo $(true))) hides nothing
+                opener = next((j for j in range(len(prev)) if prev[j][-1:] == ['$']), None)
                 sub = None if opener is None else [t for s in prev[opener + 1:] for t in s]
             if sub is not None and (not sub or any(is_py(t) or '$' in t or '`' in t for t in sub)):
                 return 'the program reading this heredoc is chosen at runtime'
