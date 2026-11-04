@@ -1146,6 +1146,19 @@ class TestLicences(OffboardTestCase):
                          "print licenses is slow and no longer run")
         self.assertIn(f"info user {U}", fake.argv())
 
+    def test_gmail_reads_on_a_mailbox_less_leaver_are_not_run_errors(self):
+        """OFF-12: show delegates/forward/sendas fail for a Gmail-off user;
+        a --no-transfer offboarding then exited 1 with nothing wrong."""
+        root = self.tmpdir()
+        fake = FakeGam([(("user", U, "show"), (False, "Gmail service not enabled"))])
+        with gam(fake), mock.patch.object(offb, "BACKUP_DIRECTORY", root):
+            path, _ = offb.preflight_snapshot(U, dry_run=False, has_mailbox=False)
+        shows = [kw for a, kw in fake.calls if a[:3] == ["user", U, "show"]]
+        self.assertEqual(len(shows), 3)
+        self.assertTrue(all(kw.get("suppress_summary_error") for kw in shows))
+        data = json.loads(path.read_text(encoding="utf-8"))["data"]
+        self.assertEqual(data["sendas"]["unread"], "no Gmail mailbox")
+
     def test_snapshot_returns_no_licence_list_when_the_read_fails(self):
         root = self.tmpdir()
         fake = FakeGam([(("info", "user", U), (False, ""))])

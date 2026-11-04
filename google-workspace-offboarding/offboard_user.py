@@ -2126,7 +2126,8 @@ def _parse_info_user_licences(output: str) -> Optional[List[Tuple[str, str]]]:
     return None
 
 
-def preflight_snapshot(email: str, dry_run: bool, timestamp: str = ""
+def preflight_snapshot(email: str, dry_run: bool, timestamp: str = "",
+                       has_mailbox: bool = True
                        ) -> Tuple[Optional[Path], Optional[List[Tuple[str, str]]]]:
     """
     [RECOMMENDED] Export user state to a JSON file before making changes.
@@ -2143,6 +2144,10 @@ def preflight_snapshot(email: str, dry_run: bool, timestamp: str = ""
     Returns (snapshot_file_path, licences) where licences is the
     [(skuId, name), ...] list for the licence-removal phase, or None when the
     read failed (the phase then queries for itself rather than assume none).
+
+    With has_mailbox False (Gmail off, e.g. Cloud Identity) the three Gmail
+    reads still run, since that field can read False on a real mailbox, but
+    a failure is noted in the snapshot rather than as a run error (OFF-12).
     """
     print_header("PRE-FLIGHT SNAPSHOT")
 
@@ -2156,17 +2161,20 @@ def preflight_snapshot(email: str, dry_run: bool, timestamp: str = ""
 
     print_info("Capturing user info, groups, aliases, delegates, forwarding and send-as (in parallel)...")
     ro = dict(dry_run=False, capture_output=True)
+    gmail = dict(ro, timeout=30, suppress_summary_error=not has_mailbox)
     results = run_gam_parallel({
         "user_info": (["info", "user", email], dict(ro, timeout=60)),
         "groups": (["user", email, "print", "groups"], dict(ro, timeout=60, stdout_only=True)),
         "aliases": (["print", "aliases", "user", email], dict(ro, timeout=30, stdout_only=True)),
-        "delegates": (["user", email, "show", "delegates"], dict(ro, timeout=30)),
-        "forwarding": (["user", email, "show", "forward"], dict(ro, timeout=30)),
-        "sendas": (["user", email, "show", "sendas"], dict(ro, timeout=30)),
+        "delegates": (["user", email, "show", "delegates"], gmail),
+        "forwarding": (["user", email, "show", "forward"], gmail),
+        "sendas": (["user", email, "show", "sendas"], gmail),
     }, workers=6)
     for key, (ok, output) in results.items():
         if ok:
             snapshot["data"][key] = output
+        elif not has_mailbox and key in ("delegates", "forwarding", "sendas"):
+            snapshot["data"][key] = {"unread": "no Gmail mailbox", "output": output}
 
     licences: Optional[List[Tuple[str, str]]] = None
     if results["user_info"][0]:
@@ -5419,7 +5427,7 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
         summary_skip("Pre-flight snapshot (--no-snapshot)")
     else:
         result = run_phase("Pre-flight snapshot", preflight_snapshot,
-                           user_email, dry_run, run_timestamp)
+                           user_email, dry_run, run_timestamp, has_mailbox=has_mailbox)
         if result:
             cached_licences = result[1]
     _abort_if_shutdown(dry_run, "the pre-flight snapshot")
