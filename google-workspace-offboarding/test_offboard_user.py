@@ -1240,6 +1240,30 @@ class TestDeleteUser(OffboardTestCase):
         self.assertTrue(any("cancelled" in w for w in offb.summary_warnings))
 
 
+class TestLogFile(OffboardTestCase):
+
+    def test_log_file_has_no_colour_codes(self):
+        """OFF-10: the FileHandler got the same coloured text as the console."""
+        tmp = self.tmpdir()
+        root = logging.getLogger()
+        saved = root.handlers[:]
+        root.handlers[:] = []
+        try:
+            with mock.patch.object(offb.sys, "stdout", io.StringIO()):
+                offb.logger = offb.setup_logging(tmp, "x@y.z", "20260101_000000")
+                offb.print_error("boom")
+                console = offb.sys.stdout.getvalue()
+            for h in root.handlers:
+                h.close()
+        finally:
+            root.handlers[:] = saved
+            offb.logger = _TEST_LOGGER
+        text = (tmp / "x@y.z_20260101_000000.log").read_text(encoding="utf-8")
+        self.assertIn("[ERROR] boom", text)
+        self.assertNotIn("\x1b[", text)
+        self.assertIn("\x1b[", console)
+
+
 ###############################################################################
 # Drive transfer
 ###############################################################################

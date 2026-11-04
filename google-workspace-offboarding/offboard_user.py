@@ -753,6 +753,17 @@ def _force_utf8_console():
             pass  # Not a real stream (captured/piped in tests); nothing to do.
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+class _PlainFormatter(logging.Formatter):
+    """The console gets colour; the log file must not (OFF-10: every line of
+    an interactive run's log carried escape codes)."""
+
+    def format(self, record):
+        return _ANSI_RE.sub("", super().format(record))
+
+
 def setup_logging(log_dir: Optional[Path] = None, user_email: str = "", timestamp: str = ""):
     """Initialise logging with both file and console handlers."""
     global LOG_FILENAME
@@ -770,14 +781,12 @@ def setup_logging(log_dir: Optional[Path] = None, user_email: str = "", timestam
     else:
         LOG_FILENAME = filename
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler(LOG_FILENAME, encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+    fmt = "%(asctime)s [%(levelname)s] %(message)s"
+    file_handler = logging.FileHandler(LOG_FILENAME, encoding='utf-8')
+    file_handler.setFormatter(_PlainFormatter(fmt))
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(logging.Formatter(fmt))
+    logging.basicConfig(level=logging.INFO, handlers=[file_handler, console])
     return logging.getLogger(__name__)
 
 
