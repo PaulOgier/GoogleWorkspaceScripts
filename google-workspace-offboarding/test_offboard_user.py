@@ -22,6 +22,7 @@ import importlib.util
 import io
 import json
 import logging
+import os
 import sqlite3
 import subprocess
 import sys
@@ -1438,7 +1439,8 @@ class TestStreamProcess(OffboardTestCase):
 
     def test_a_short_line_arrives_before_the_child_exits(self):
         """OFF-11: read(256) held a short line until 256 characters or EOF."""
-        child = ("import sys, time; sys.stdout.write('é ready\\n'); "
+        # bytes, not text: a Windows pipe would encode text in cp1252, and GYB and rclone write UTF-8
+        child = ("import sys, time; sys.stdout.buffer.write('\\u00e9 ready\\n'.encode('utf-8')); "
                  "sys.stdout.flush(); time.sleep(3)")
         seen = []
         start = time.monotonic()
@@ -2508,10 +2510,12 @@ class TestArgParsing(OffboardTestCase):
                  "--log-dir", str(blocker / "logs")],
                 stdin=subprocess.DEVNULL, capture_output=True, text=True,
                 cwd=tmp, timeout=60,
-                env={"PATH": str(Path(sys.executable).parent)},
+                # Python 3.8 on Windows cannot start without SYSTEMROOT
+                env={"PATH": str(Path(sys.executable).parent),
+                     **{k: os.environ[k] for k in ("SYSTEMROOT",) if k in os.environ}},
             )
         self.assertNotIn("Traceback", result.stderr, result.stderr)
-        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("--log-dir", result.stdout + result.stderr)
 
     def test_eof_at_the_user_prompt_exits_cleanly(self):
