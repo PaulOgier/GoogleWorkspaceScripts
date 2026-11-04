@@ -738,6 +738,13 @@ AUDIT_2026_11 += [
     ('gam info domain\n$(command -v python3) - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n`which python3` - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n$(which python3) <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    # a gam argument list on a line nothing else read fails closed, whatever reads it
+    ('gam info domain\n( python3 - ) <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nuv run python - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nalias p=python3\np - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nperl - <<\'EOF\'\nsystem(\'gam\', \'delete\', \'user\', \'b@example.com\');\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\npython3 -c "import subprocess; subprocess.run([\'gam\',\'delete\',\'user\',\'b@example.com\'])"', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nmail -s hi $(whoami) <<EOF\nhello\nEOF\n# subprocess.run(["gam", "delete"])', 'shell', g.READ, 'exact'),
     ('gam info domain\n`true` timeout -k 5 python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n"$(which python3)" - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n"`which python3`" <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
