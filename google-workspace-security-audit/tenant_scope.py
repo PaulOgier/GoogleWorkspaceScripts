@@ -4119,15 +4119,27 @@ def check_admin_second_factors(ctx: RunContext) -> List[Finding]:
     report = {col(r, "email", "userEmail").lower(): r
               for r in ctx.rows("report_users")}
     rows = []
+    # A column the usage report does not carry is "not reported", never 0:
+    # read as 0 it would call a passkey-only admin phishable.
+    reported = {k.lower() for k in (ctx.rows("report_users") or [{}])[0] if k}
+
+    def count(rep, name):
+        if name not in reported:
+            return "not reported"
+        return col(rep, name) or "0"
     for admin in _super_admins(ctx):
         email = col(admin, "primaryEmail")
         rep = report.get(email.lower())
         if rep is None:
             continue
         rows.append({"Super admin": email,
-                     "Security keys": col(rep, "accounts:num_security_keys") or "0",
-                     "Passkeys": col(rep, "accounts:num_passkeys_enrolled") or "0",
+                     "Security keys": count(rep, "accounts:num_security_keys"),
+                     "Passkeys": count(rep, "accounts:num_passkeys_enrolled"),
                      "2SV enrolled": col(admin, "isEnrolledIn2Sv")})
+    if any("not reported" in (r["Security keys"], r["Passkeys"])
+           for r in rows):
+        # Cannot judge every admin, so never listed as checked and clean.
+        ctx.consulted.append(("report_users", False))
     if not rows:
         return []
     # Admins with no 2SV at all have their own CRITICAL finding; this one is

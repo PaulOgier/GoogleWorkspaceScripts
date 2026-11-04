@@ -4103,6 +4103,24 @@ f2,Notes.docx,u@example.com,user,reader,y@other.example,""")
                          found[0].source)
 
 
+class TestPasskeyColumnMissing(CtxTestCase):
+    def test_missing_passkey_column_is_not_zero(self):
+        """AUD-32: a column the report lacks must not count as 0 passkeys."""
+        self.write_csv("users", f"""{USERS_HEADER}
+boss@example.com,False,False,2026-08-01T10:00:00Z,True,True,,True,False,Business""")
+        self.write_csv("report_users", """email,accounts:num_security_keys
+boss@example.com,0""")
+        found = {f.fid: f for f in ts.check_admin_second_factors(self.ctx)}
+        self.assertNotIn("admins-not-phish-resistant", found)
+        self.assertIn(("report_users", False), self.ctx.consulted)
+        # Control: with the column present and 0, the admin is flagged.
+        self.write_csv("report_users", """email,accounts:num_security_keys,accounts:num_passkeys_enrolled
+boss@example.com,0,0""")
+        self.ctx._rows_cache.clear()
+        found = {f.fid for f in ts.check_admin_second_factors(self.ctx)}
+        self.assertIn("admins-not-phish-resistant", found)
+
+
 class TestPerTenantAdmin(unittest.TestCase):
     """AUD-10: each tenants.json entry may name its own auditing admin."""
 
