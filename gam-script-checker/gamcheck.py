@@ -314,7 +314,8 @@ FILE_COMMANDS = {'[', '[[', 'test', 'cp', 'mv', 'ls', 'ln', 'rm', 'rmdir', 'mkdi
 GAM_LOOKUP = re.compile(r'(?i)\b(?:which|command\s+-v|type\s+-p|Get-Command|where(?:\.exe)?)\s+["\']?gam(?:7|\.exe)?\b'
                         r'|\bJoin-Path\b.*\bgam(?:\.exe)?\b')
 # gam as the first item of a quoted argument list: ["gam", "delete", ...], system('gam', 'delete'), execFileSync('gam', [...])
-GAM_LIST = re.compile(r'["\'](?:\S*[/\\])?gam(?:\.exe|\.py)?["\']\s*,\s*\[?\s*["\']')
+GAM_LIST = re.compile(r'["\'](?:\S*[/\\])?gam(?:\.exe|\.py)?["\']\s*,')
+GAM_LIST_LITERAL = re.compile(r'((?:["\'][^"\']*["\']\s*,\s*\[?\s*)*["\'][^"\']*["\'])\s*[\])]')
 GAM_INSIDE = re.compile(r'(?:^|[\s"\'(=])(?:\S*[/\\])?gam(?:\.exe|\.py)?\s+[A-Za-z]')
 CREDENTIAL_RE = re.compile(r'(?i)oauth2(?:service)?\.(?:txt|json)|client_secrets\.json')
 NETWORK_COMMANDS = {'curl', 'wget', 'invoke-webrequest', 'invoke-restmethod', 'iwr', 'irm', 'nc', 'ncat', 'scp', 'sftp',
@@ -1615,11 +1616,12 @@ class Checker:
                 if raw.lstrip().startswith('#'):
                     continue
                 for m in GAM_LIST.finditer(raw):
-                    # each list is read only when a finding on this line carries every one of its words
-                    span = raw[m.start():].split(')')[0]
-                    words = set(re.findall(r'["\']([^"\']*)["\']', span))
-                    if not any(f.file == ctx.file and f.line == n and f.command.split()[:1] == ['gam'] and
-                               words <= set(f.command.split()) for f in findings):
+                    # read only when the list is all string literals up to its closing bracket and a finding on
+                    # this line starts with exactly those words; a variable element ('gam', $v, ...) fails closed
+                    lit = GAM_LIST_LITERAL.match(raw, m.start())
+                    words = re.findall(r'["\']([^"\']*)["\']', lit.group(1)) if lit else None
+                    if not words or not any(f.file == ctx.file and f.line == n and
+                                            f.command.split()[:len(words)] == words for f in findings):
                         findings.append(Finding(ctx.file, n, UNKNOWN, 'runs gam from code the checker could not follow',
                                                 short([raw.strip()]), note='check what reads this line on its own'))
                         break
