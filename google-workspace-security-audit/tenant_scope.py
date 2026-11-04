@@ -711,7 +711,9 @@ def csv_data_rows(source) -> int:
 def read_csv_rows(path: Path) -> List[Dict[str, str]]:
     if not path.is_file():
         return []
-    with open(path, newline="", encoding="utf-8") as fh:
+    # utf-8-sig: GAM with charset utf-8-sig (or Excel re-saving a CSV in a
+    # resumed run) writes a BOM, which would otherwise hide the first column.
+    with open(path, newline="", encoding="utf-8-sig", errors="replace") as fh:
         return list(csv.DictReader(fh))
 
 
@@ -728,7 +730,9 @@ def col(row: Dict[str, str], *names: str) -> str:
     for name in names:
         if name in row:
             return (row[name] or "").strip()
-    lowered = {k.lower().strip(): v for k, v in row.items() if k}
+    # The BOM strip covers rows parsed from GAM's stdout, not a file.
+    lowered = {k.lower().strip().lstrip("\ufeff"): v
+               for k, v in row.items() if k}
     for name in names:
         if name.lower() in lowered:
             return (lowered[name.lower()] or "").strip()
@@ -2144,7 +2148,8 @@ def _strip_to_header(path: Path, header: str, status: str, rows: int,
     at all is an error, never a zero."""
     if not path.exists():
         return status, rows, note
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    lines = path.read_text(encoding="utf-8-sig",
+                           errors="replace").splitlines(keepends=True)
     start = next((i for i, ln in enumerate(lines) if ln.startswith(header)),
                  None)
     if start is None:

@@ -3867,6 +3867,21 @@ class TestManifestAtomicSave(CtxTestCase):
         self.assertEqual("C_A", meta["customer_id"])
 
 
+class TestBomCsv(CtxTestCase):
+    def test_bom_header_keeps_the_user_list(self):
+        """AUD-16: a BOM on users.csv emptied the audited user list."""
+        (self.run_dir / "users.csv").write_text(
+            "\ufeffprimaryEmail,suspended\nu@example.com,False\n",
+            encoding="utf-8")
+        self.ctx.set_module("users", "ok", 1)
+        self.assertEqual(["u@example.com"], ts.active_users(self.ctx))
+
+    def test_bom_in_parsed_stdout_row(self):
+        self.assertEqual("u@example.com",
+                         ts.col({"\ufeffprimaryEmail": "u@example.com"},
+                                "primaryEmail"))
+
+
 class TestPerTenantAdmin(unittest.TestCase):
     """AUD-10: each tenants.json entry may name its own auditing admin."""
 
