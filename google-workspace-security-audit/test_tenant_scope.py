@@ -3794,6 +3794,15 @@ class TestTempGrantCleanupInterrupted(CtxTestCase):
                           and c[2] in ("add", "delete")])
         self.assertEqual([], self.on_disk())
 
+    def test_drive_not_visible_to_admin_is_not_read_as_non_member(self):
+        """Live on dev, GAM 7.48.20: an admin whose Drive cannot open the
+        drive gets a File/Folder-level Does not exist (exit 50)."""
+        calls, (status, _, note) = self.run_recording(
+            lambda args: (50, "", "User: admin@example.com, Drive File/Folder "
+                          "ID: D1, Show Info Failed: Does not exist\n"))
+        self.assertFalse(any("add" in c or "delete" in c for c in calls))
+        self.assertIn("membership check failed", note)
+
     def test_failed_membership_check_never_grants(self):
         """Review of AUD-41: a quota error is not "not a member"."""
         calls, (status, _, note) = self.run_recording(
@@ -3813,7 +3822,7 @@ class TestTempGrantCleanupInterrupted(CtxTestCase):
         def fake(args, **kw):
             calls.append(args)
             if "info" in args:
-                return 56, "", "Does not exist\n"
+                return 56, "", "Permission ID: x, Does not exist\n"
             if "add" in args:
                 ts.RunContext.save = failing_save
                 return 0, "", ""

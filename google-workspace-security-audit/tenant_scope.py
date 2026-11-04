@@ -1858,10 +1858,13 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
     def admin_is_member(drive_id: str) -> Optional[bool]:
         """Live check that the admin already holds a permission on the drive.
 
-        GAM 7.50.00 `info drivefileacl ... formatjson` prints one JSON line
-        carrying "permission", or a "Does not exist" warning and a non-zero
-        exit. True or False only on those; None (do not grant) on anything
-        else, since a grant over a real membership deletes it on removal."""
+        GAM prints one JSON line carrying "permission" for a member, and
+        "Permission ID: <id>, Does not exist" (exit 56) for a non-member.
+        True or False only on those; None (do not grant) on anything else,
+        since a grant over a real membership deletes it on removal. Seen on
+        dev with GAM 7.48.20: an admin whose Drive cannot open the drive gets
+        "Drive File/Folder ID: <id>, Show Info Failed: Does not exist"
+        (exit 50), which says nothing about membership."""
         rc, out, err = run_gam(
             ["user", ctx.admin, "info", "drivefileacl", drive_id, ctx.admin,
              "adminaccess", "formatjson"],
@@ -1870,7 +1873,8 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
         if ctx.args.dry_run:
             return False
         if rc != 0:
-            return False if "Does not exist" in err else None
+            return False if re.search(r"Permission ID: [^,]*, Does not exist",
+                                      err) else None
         for line in out.splitlines():
             try:
                 row = json.loads(line)
