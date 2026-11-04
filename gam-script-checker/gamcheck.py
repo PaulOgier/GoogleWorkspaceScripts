@@ -1835,6 +1835,7 @@ class _PythonReader:
         self.scopes = {}   # function node (or None for module level) -> {name: [assigned values]}
         self.local = {}
         self.star = []     # modules imported with from x import *
+        self.bound = set() # names bound to functools.partial(run, <arguments>)
 
     def run(self):
         for node in ast.walk(self.tree):
@@ -1903,16 +1904,20 @@ class _PythonReader:
         getattr(subprocess, "run") and a run function from a star import resolve to that function.
         """
         if isinstance(func, ast.Name):
+            # every assignment of the name is tried before its import, so a later run = subprocess.run counts
+            for value in (self.local.get(func.id) or self.scopes.get(None, {}).get(func.id) or []) if depth < 8 else []:
+                partial = isinstance(value, ast.Call) and value.args and \
+                    self._name(value.func, depth + 1) in ('functools.partial', 'partial')
+                target = value.args[0] if partial else value
+                if isinstance(target, (ast.Name, ast.Attribute, ast.Call)):
+                    bound = self._name(target, depth + 1)
+                    if bound in EXEC_CALLS:
+                        if partial and (len(value.args) > 1 or any(k.arg in ('args', 'shell', 'executable', None)
+                                                                   for k in value.keywords)):
+                            self.bound.add(func.id)
+                        return bound
             if func.id in self.aliases:
                 return self.aliases[func.id]
-            for value in (self.local.get(func.id) or self.scopes.get(None, {}).get(func.id) or []) if depth < 3 else []:
-                if isinstance(value, ast.Call) and self._name(value.func, depth + 1) in ('functools.partial', 'partial') \
-                        and value.args:
-                    value = value.args[0]
-                if isinstance(value, (ast.Name, ast.Attribute, ast.Call)):
-                    bound = self._name(value, depth + 1)
-                    if bound in EXEC_CALLS:
-                        return bound
             star = next((f'{m}.{func.id}' for m in self.star if f'{m}.{func.id}' in EXEC_CALLS), None)
             return star or func.id
         if isinstance(func, ast.Attribute):
@@ -2023,13 +2028,18 @@ class _PythonReader:
     def _exec_argv(self, call, params=()):
         """For a subprocess/os call, return (tokens, via_shell) or (None, ...) when unreadable."""
         shape = OS_ARGV.get(self._name(call.func) or '')
-        if shape and shape[0] == 'list':
-            return (self._argv(call.args[shape[1]], params) if len(call.args) > shape[1] else None), False
         if shape:
-            rest = call.args[shape[1]:shape[2] or None]
-            if any(isinstance(a, ast.Starred) for a in rest) or not rest:
-                return None, False
-            return self._argv(ast.List(elts=rest, ctx=ast.Load()), params), False
+            if shape[0] == 'list':
+                toks = self._argv(call.args[shape[1]], params) if len(call.args) > shape[1] else None
+            else:
+                rest = call.args[shape[1]:shape[2] or None]
+                toks = None if any(isinstance(a, ast.Starred) for a in rest) or not rest else \
+                    self._argv(ast.List(elts=rest, ctx=ast.Load()), params)
+            path_at = shape[1] - 1  # exec*(path, ...), spawn*(mode, path, ...): the path is what runs, not argv[0]
+            if toks and path_at >= 0:
+                path = self._string(call.args[path_at], params) if len(call.args) > path_at else None
+                toks = [Dyn(ast.unparse(call.args[path_at])) if path is None else path] + toks[1:]
+            return toks, False
         target = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg in ('args', 'command', 'cmd')), None)
         if target is None:
             return None, False
@@ -2078,6 +2088,11 @@ class _PythonReader:
         if name not in EXEC_CALLS:
             return
         if any(node is w[3] for w in self.wrappers.values()):
+            return
+        if isinstance(node.func, ast.Name) and node.func.id in self.bound:
+            self.findings.append(Finding(self.ctx.file, node.lineno, UNKNOWN,
+                                         'runs a command through functools.partial with bound arguments',
+                                         ast.unparse(node)[:140], note='check the partial and this call together'))
             return
         toks, via_shell = self._exec_argv(node)
         via_shell = via_shell or name in ('os.system', 'os.popen', 'subprocess.getoutput', 'subprocess.getstatusoutput',

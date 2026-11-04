@@ -653,6 +653,13 @@ AUDIT_2026_11 += [
     ('import subprocess, os, functools, asyncio\nsubprocess.run(["gam", "info", "domain"])\nasyncio.create_subprocess_exec("gam", "delete", "user", "b@example.com")', 'python', g.DESTRUCTIVE, 'floor'),
     ('import subprocess, os, functools, asyncio\nsubprocess.run(["gam", "info", "domain"])\nCMDS = ["gam", "delete", "user", "b@example.com"]', 'python', g.DESTRUCTIVE, 'floor'),
     ('import subprocess, os, functools, asyncio\nsubprocess.run(["gam", "info", "domain"])\nrun = subprocess.run\nrun(["gam", "print", "users"])\nchoices = ["print", "info"]', 'python', g.READ, 'exact'),
+    # the exec path is what runs; partials that bind arguments; a later binding beats an import
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nos.execv("/usr/bin/gam", ["x", "delete", "user", "b@example.com"])', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nrun = functools.partial(os.execlp, "gam", "gam", "delete")\nrun("user", "b@example.com")',
+     'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os as run\nsubprocess.run(["gam", "info", "domain"])\nrun = subprocess.run\nrun(["gam", "delete", "user", "b@example.com"])', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nos.execv(sys.argv[1], ["gam", "print", "users"])', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nos.execvp("gam", ["gam", "print", "users"])', 'python', g.READ, 'exact'),
 ]
 
 
