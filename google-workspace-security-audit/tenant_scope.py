@@ -278,6 +278,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -2222,8 +2223,21 @@ def _needs_run(ctx: RunContext, mod: Dict) -> bool:
 
 
 def _run_collector(ctx: RunContext, mod: Dict) -> Tuple[str, int, str, float]:
+    """Run one module's collector; an exception becomes that module's error.
+
+    Checks were isolated but collectors were not, so one full disk, decode
+    error or truncated CSV ended the whole run with a traceback and no
+    report (and in the light pool, lost every result still pending)."""
     started = time.time()
-    status, rows, note = COLLECTORS[mod.get("collector", "simple")](ctx, mod)
+    try:
+        status, rows, note = COLLECTORS[mod.get("collector", "simple")](ctx,
+                                                                        mod)
+    except Exception as exc:
+        try:
+            ctx.stderr_log(mod["key"], traceback.format_exc())
+        except OSError:
+            pass                    # the disk that just filled, perhaps
+        status, rows, note = "error", 0, f"{type(exc).__name__}: {exc}"
     return status, rows, note, time.time() - started
 
 

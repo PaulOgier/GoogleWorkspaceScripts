@@ -3882,6 +3882,25 @@ class TestBomCsv(CtxTestCase):
                                 "primaryEmail"))
 
 
+class TestCollectorThatRaises(CtxTestCase):
+    def test_exception_becomes_a_module_error(self):
+        """AUD-17: one collector raising must not end the run."""
+        def boom(ctx, mod):
+            raise OSError(28, "No space left on device")
+        original = dict(ts.COLLECTORS)
+        ts.COLLECTORS["simple"] = boom
+        try:
+            status, rows, note, _ = ts._run_collector(
+                self.ctx, ts.MODULE_BY_KEY["groups"])
+        finally:
+            ts.COLLECTORS.clear()
+            ts.COLLECTORS.update(original)
+        self.assertEqual(("error", 0), (status, rows))
+        self.assertIn("No space left", note)
+        self.assertIn("Traceback", (self.run_dir / "gam_stderr.log")
+                      .read_text(encoding="utf-8"))
+
+
 class TestPerTenantAdmin(unittest.TestCase):
     """AUD-10: each tenants.json entry may name its own auditing admin."""
 
