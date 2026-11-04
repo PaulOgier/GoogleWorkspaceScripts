@@ -217,8 +217,8 @@ the full module registry with keys and tiers.
   security center, advanced mobile management) the tenant's licences include,
   shown only when they do [Info]
 - Which Google services are switched on or off [Info]
-- The security-checklist settings no API exposes, listed so they get checked
-  by hand in the Admin console, and other checklist settings (Advanced
+- The security-checklist settings this audit does not judge, listed so they
+  get checked by hand in the Admin console, and other checklist settings (Advanced
   Protection, passkeys, mail import and more) shown raw [Info]
 - Settings looser than the CISA Google Workspace baseline: automatic
   forwarding allowed, 2-step verification skipped on trusted devices,

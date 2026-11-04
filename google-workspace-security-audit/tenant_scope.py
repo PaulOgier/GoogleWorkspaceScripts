@@ -5032,12 +5032,12 @@ def check_external_chat(ctx: RunContext) -> List[Finding]:
         hits, "policies.csv", count=len(hits))]
 
 
-# Checklist settings with no policy type in `gam print policies` (checked
-# against a full dev-tenant export, 2026-09-14), so no read can judge them.
+# Checklist settings this audit does not judge: most have no policy type in
+# `gam print policies` (dev-tenant export, 2026-09-14); POP/IMAP, the
+# external recipient warning and primary-calendar sharing are read but not
+# yet checked. Settings the baseline judges (POLICY_BASELINE) stay off this
+# list, or the card contradicts the finding above it.
 CONSOLE_ONLY_SETTINGS = [
-    ("Gmail", "Automatic forwarding",
-     "Off. The forwards section above shows who forwards today, not whether "
-     "the door is open."),
     ("Gmail", "POP and IMAP access",
      "Off unless a named user or a migration needs it."),
     ("Gmail", "Bypass spam filters for internal "
@@ -5045,18 +5045,13 @@ CONSOLE_ONLY_SETTINGS = [
     ("Gmail", "Approved senders",
      "Require sender authentication; no whole domains."),
     ("Gmail", "External recipient warning", "On."),
-    ("Drive and Docs", "Invitations to non-Google "
-     "accounts", "Off: external collaborators sign in with a Google Account."),
-    ("Groups for Business", "Group creation and outside "
-     "access", "Admins create groups; groups private to the organisation."),
+    ("Groups for Business", "Outside access to groups",
+     "Groups private to the organisation."),
     ("Sites", "Sharing outside the organisation",
      "Off, or warn."),
     ("Drive and Docs", "Sharing outside the organisation",
      "On if needed, with \"visible to anyone with the link\" off and a "
      "warning when sharing outside the domain."),
-    ("Drive and Docs", "General access default for new items",
-     "Private to the owner."),
-    ("Drive and Docs", "Access Checker", "Recipients only."),
     ("Calendar", "External sharing of primary calendars",
      "Free/busy only, with a warning when inviting outside guests."),
     ("Security > Alerts", "Who receives alert emails",
@@ -5098,9 +5093,13 @@ def check_console_only_settings(ctx: RunContext) -> List[Finding]:
     return [Finding(
         "console-only-settings", "INFO",
         "Security settings to check by hand in the Admin console",
-        "Google's security checklist recommends these settings, but the API "
-        "this audit reads does not expose them. Nothing in this report "
-        "should be taken as a verdict on them.",
+        "Google's security checklist recommends these settings, and this "
+        "audit does not judge them: most are not in the API it reads, and "
+        "the rest are read but not yet checked. Nothing in this report "
+        "should be taken as a verdict on them. Settings judged above "
+        "(automatic forwarding, invitations to non-Google accounts, the "
+        "general access default, Access Checker, group creation) are not "
+        "repeated here.",
         "Open each page in the Admin console and compare against the "
         "recommendation.",
         rows, "policies.csv", count=len(rows))]

@@ -1548,6 +1548,18 @@ class TestPolicyChecks(PolicyTestCase):
         self.assertEqual(["console-only-settings"], self.finding_ids(findings))
         self.assertEqual(len(ts.CONSOLE_ONLY_SETTINGS), findings[0].count)
 
+    def test_console_only_list_leaves_out_what_the_baseline_judges(self):
+        """AUD-23: the card said the API does not expose settings the
+        baseline judges in the same report."""
+        names = {setting for _, setting, _ in ts.CONSOLE_ONLY_SETTINGS}
+        for judged in ("Automatic forwarding", "Access Checker",
+                       "General access default for new items",
+                       "Invitations to non-Google accounts",
+                       "Group creation and outside access"):
+            self.assertNotIn(judged, names)
+        meaning = ts.check_console_only_settings(self.ctx)[0].meaning
+        self.assertNotIn("does not expose them", meaning)
+
 
 class TestLicenceWaste(CtxTestCase):
     DOMAININFO = ("Customer ID: C046t23xk\n"
