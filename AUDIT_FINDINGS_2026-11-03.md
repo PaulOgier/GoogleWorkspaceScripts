@@ -477,7 +477,7 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 
 ## C2. High (under-warnings)
 
-### CHK-03 `[ ]` A command whose program is a variable the checker does not know is silently ignored, not CANNOT TELL
+### CHK-03 `[x]` A command whose program is a variable the checker does not know is silently ignored, not CANNOT TELL
 - CONFIRMED (coordinator reproduced the first form). `_gam_position` 1453-1475 returns None and `_gam_hidden` 1401-1414 returns False, so the segment produces no finding. README: "Commands put together while the script runs ... come out as CANNOT TELL, never as READ-ONLY". All print READ-ONLY with a read-only gam line above:
   ```
   BIN="$(which gam)"; $BIN delete user bob@example.com            (shell)
@@ -490,7 +490,7 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
   The blind set's E11/F3 pass only because the variable happens to be called `GAM`/`$gam` (`_gam_name` 968 tests `'gam' in name`).
 - Fix: when a segment's first non-assignment token is a variable (or `& $var`) that is not a known gam variable, emit CANNOT TELL "runs a program named by a variable"; treat assignments whose value contains `command -v gam`, `which gam`, `Get-Command gam`, `Join-Path ... gam.exe` or `%~dp0gam.exe` as gam variables.
 
-### CHK-04 `[ ]` `%~dp0gam.exe` in a batch file is not recognised as gam
+### CHK-04 `[x]` `%~dp0gam.exe` in a batch file is not recognised as gam
 - CONFIRMED (coordinator reproduced). `_gam_name` 958-972 splits on `[\\/]` and is left with `%~dp0gam.exe`; after `.exe` is stripped, `%~dp0gam` is not in `GAM_NAMES`. `%~dp0\gam.exe` works. `%~dp0gam.exe delete user bob@example.com` prints READ-ONLY. This is the standard "gam next to this script" idiom in `.bat` files.
 
 ### CHK-05 `[ ]` Text piped into a shell is not reported

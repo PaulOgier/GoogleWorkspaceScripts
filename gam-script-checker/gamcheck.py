@@ -302,6 +302,9 @@ FILE_COMMANDS = {'[', '[[', 'test', 'cp', 'mv', 'ls', 'ln', 'rm', 'rmdir', 'mkdi
                  'touch', 'stat', 'file', 'du', 'dirname', 'basename', 'realpath', 'readlink', 'tar', 'unzip', 'zip',
                  'shasum', 'sha256sum', 'md5', 'md5sum', 'diff', 'rsync', 'scp', 'test-path', 'copy-item', 'move-item',
                  'remove-item', 'get-item', 'get-childitem', 'robocopy', 'xcopy', 'copy', 'move', 'del', 'dir', 'mklink'}
+# GAM=$(which gam), $t = Get-Command gam, $exe = Join-Path $dir "gam.exe": the variable holds gam's path
+GAM_LOOKUP = re.compile(r'(?i)\b(?:which|command\s+-v|type\s+-p|Get-Command|where(?:\.exe)?)\s+["\']?gam(?:7|\.exe)?\b'
+                        r'|\bJoin-Path\b.*\bgam(?:\.exe)?\b')
 GAM_INSIDE = re.compile(r'(?:^|[\s"\'(=])(?:\S*[/\\])?gam(?:\.exe|\.py)?\s+[A-Za-z]')
 CREDENTIAL_RE = re.compile(r'(?i)oauth2(?:service)?\.(?:txt|json)|client_secrets\.json')
 NETWORK_COMMANDS = {'curl', 'wget', 'invoke-webrequest', 'invoke-restmethod', 'iwr', 'irm', 'nc', 'ncat', 'scp', 'sftp',
@@ -967,6 +970,7 @@ def _gam_name(tok, gam_vars, wrappers):
         name = (var.group(1) or var.group(2) or var.group(3)).lower()
         return name in gam_vars or 'gam' in name
     base = re.split(r'[\\/]', raw)[-1].lower()
+    base = re.sub(r'^(?:%~[a-z]*\d|%\w+%)+', '', base)  # %~dp0gam.exe: gam next to the batch file
     if base.endswith('.exe'):
         base = base[:-4]
     return base in GAM_NAMES
@@ -1362,7 +1366,7 @@ class Checker:
             segments.append(cur)
             seps.append('')
             local_text = []
-            for seg, sep in zip(segments, seps):
+            for i, (seg, sep) in enumerate(zip(segments, seps)):
                 seg = self._drop_redirects(seg)
                 at = self._gam_position(seg, gam_vars, wrappers)
                 if at is None:
@@ -1379,6 +1383,9 @@ class Checker:
                                                 short(seg), note='handed to another program (bash -c, ssh, Start-Process); check the inner command on its own'))
                     elif (script := self._script_path(seg)) is not None:
                         findings.extend(ctx.follow_script(script, n, short(seg), seg))
+                    elif (var := self._variable_program(seg, lang, seps[i - 1] if i else '')) is not None:
+                        findings.append(Finding(ctx.file, n, UNKNOWN, f'runs a program named by the variable {var}',
+                                                short(seg), note=f'if {var} holds gam, check the command with gam written out'))
                     local_text.extend([' '.join(seg), sep])
                     continue
                 args = [_dynamic(t, lang) for t in seg[at + 1:]]
@@ -1467,6 +1474,29 @@ class Checker:
         return next((t for t in names if t.lower().endswith(SCRIPT_EXTS)), names[0] if names else None)
 
     @staticmethod
+    def _variable_program(seg, lang, before):
+        """The variable a segment runs as its program ($BIN delete ..., & $exe ..., %BIN% ...), or None.
+
+        README promise: a command put together at runtime is CANNOT TELL, never READ-ONLY. In
+        PowerShell a bare $x is a value, so only & $x and . $x run it. $@ and $* are a wrapper's
+        own arguments, checked at its call sites.
+        """
+        if lang not in ('shell', 'powershell', 'batch'):
+            return None
+        k = 0
+        while k < len(seg) and (re.fullmatch(r'[A-Za-z_]\w*=.*', seg[k]) or seg[k].lower() in PREFIX_WORDS):
+            k += 1
+        call = lang != 'powershell' or before == '&'
+        if lang == 'powershell' and k < len(seg) and seg[k] == '.':
+            k, call = k + 1, True
+        if k >= len(seg) or not call or (k + 1 < len(seg) and seg[k + 1] in ('=', '+=')):
+            return None
+        tok = seg[k].strip('"\'`')
+        if re.fullmatch(r'\$\{?[A-Za-z_]\w*(?:[:#%/^,][^}]*)?\}?|%[A-Za-z_]\w*%|\$env:[A-Za-z_]\w*', tok, re.I):
+            return tok
+        return None
+
+    @staticmethod
     def _drop_redirects(seg):
         out, skip = [], False
         for t in seg:
@@ -1517,7 +1547,7 @@ class Checker:
         for _, line in lines:
             m = re.match(assign, line)
             words = m.group(2).strip().strip('"\'').split() if m else []  # X=" " leaves no word
-            if m and _gam_name(words[0] if words else '', set(), set()):
+            if m and (_gam_name(words[0] if words else '', set(), set()) or GAM_LOOKUP.search(m.group(2))):
                 gam_vars.add(m.group(1).lower())
             m = re.match(r'^\s*alias\s+([\w-]+)=[\'"]?(\S+)', line)
             if m and _gam_name(m.group(2).strip('"\''), set(), set()):

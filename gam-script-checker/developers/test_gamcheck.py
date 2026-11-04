@@ -581,6 +581,18 @@ AUDIT_2026_11 = [
     # GAM batch files run one command per physical line
     ('gam print users \\\ngam delete user bob@example.com', 'gambatch', g.DESTRUCTIVE, 'floor'),
     ('# gam delete user x@example.com\ngam print users', 'gambatch', g.READ, 'exact'),
+    # a program named by a variable the checker does not know is CANNOT TELL, never READ-ONLY
+    ('gam info domain\nBIN="$(which gam)"; $BIN delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nTOOL=/opt/tools/t; "$TOOL" delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nprintf -v CMD "gam delete user %s" bob@example.com; $CMD', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\n$t = Get-Command gam; & $t delete user bob@example.com', 'powershell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\n$exe = Join-Path $PSScriptRoot "gam.exe"; & $exe delete user bob@example.com', 'powershell',
+     g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nset BIN=%~dp0gam.exe\n%BIN% delete user bob@example.com', 'batch', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nset T=%~dp0tool.exe\n%T% delete user bob@example.com', 'batch', g.UNKNOWN, 'floor'),
+    ('gam info domain\n%~dp0gam.exe delete user bob@example.com', 'batch', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\n$users = 1\n$users | ForEach-Object { $_ }', 'powershell', g.READ, 'exact'),
+    ('gam info domain\nrun() { "$@"; }', 'shell', g.READ, 'exact'),
 ]
 
 
