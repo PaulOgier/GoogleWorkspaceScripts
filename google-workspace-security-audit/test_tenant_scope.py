@@ -4003,6 +4003,15 @@ class TestCollectorThatRaises(CtxTestCase):
                       .read_text(encoding="utf-8"))
 
 
+class TestPrintStyle(unittest.TestCase):
+    def test_print_block_gives_header_and_pills_dark_text(self):
+        """AUD-25: white-on-background text printed as white on white."""
+        block = ts.STYLE[ts.STYLE.index("@media print"):]
+        self.assertRegex(block, r"header\.page \{[^}]*color:var\(--ink\)")
+        self.assertRegex(block, r"\.sev \{[^}]*color:#000")
+        self.assertIn("print-color-adjust:exact", block)
+
+
 class TestPerTenantAdmin(unittest.TestCase):
     """AUD-10: each tenants.json entry may name its own auditing admin."""
 

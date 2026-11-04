@@ -6347,6 +6347,14 @@ STYLE = """
     section.card, .tile { box-shadow:none; border:1px solid #ccc;
                           page-break-inside:avoid; }
     a { color:var(--ink); text-decoration:none; }
+    /* Browsers drop backgrounds when printing by default, and the header and
+       severity pills were white text on a background: they printed blank. */
+    header.page { background:#fff; color:var(--ink);
+                  border-bottom:2px solid var(--ink); }
+    header.page p { color:var(--muted); }
+    header.page a { color:var(--ink); }
+    .sev { color:#000; border:1px solid #000;
+           -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   }
 """
 
