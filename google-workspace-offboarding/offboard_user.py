@@ -1018,6 +1018,9 @@ def run_gam(args: List[str], dry_run: bool = True,
             capture_output=True,
             text=True,
             encoding="utf-8", errors="replace",
+            # Up to six gam processes run side by side; one waiting on the
+            # terminal's stdin would hang to its timeout (A4).
+            stdin=subprocess.DEVNULL,
             timeout=timeout
         )
 
