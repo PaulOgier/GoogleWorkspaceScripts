@@ -739,6 +739,13 @@ AUDIT_2026_11 += [
     ('gam info domain\n`which python3` - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n$(which python3) <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     # a gam argument list on a line nothing else read fails closed, whatever reads it
+    ('gam info domain\ngam print users; perl -e "system((\'gam\', \'print\', \'users\'), \'delete\')"', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\npython3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "print", "users"], check=True)\nEOF', 'shell', g.READ, 'exact'),
+    ('gam print users\nperl -e "system(\'gam\', \\\n \'delete\', \'user\', \'x\')"', 'shell', g.UNKNOWN, 'floor'),
+    ('gam print users\nuv run python - <<\'EOF\'\nimport subprocess\nsubprocess.run([\n  \'gam\',\n  \'delete\', \'user\', \'x\'])\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    ('gam print users\nnode -e "execFileSync(\\`gam\\`, [\\`delete\\`, \\`user\\`, \\`x\\`])"', 'shell', g.UNKNOWN, 'floor'),
+    ('gam print users\nbash -c "perl -e \'system(\\"gam\\", \\"delete\\", \\"user\\", \\"x\\")\'"', 'shell', g.UNKNOWN, 'floor'),
+    ('gam print users\nruby -e \'system(*%w[gam delete user x])\'', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\ngam info user b@example.com; perl -e "system(\'gam\', $v, \'user\', \'b@example.com\')"', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\ngam print users; perl -e "system(\'gam\', \'print\', \'users\'); system(\'gam\', \'delete\', \'user\', \'b@example.com\')"', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\npython3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "print", "users"]); subprocess.run(["gam", "info", "domain"])\nEOF', 'shell', g.READ, 'exact'),

@@ -313,9 +313,11 @@ FILE_COMMANDS = {'[', '[[', 'test', 'cp', 'mv', 'ls', 'ln', 'rm', 'rmdir', 'mkdi
 # GAM=$(which gam), $t = Get-Command gam, $exe = Join-Path $dir "gam.exe": the variable holds gam's path
 GAM_LOOKUP = re.compile(r'(?i)\b(?:which|command\s+-v|type\s+-p|Get-Command|where(?:\.exe)?)\s+["\']?gam(?:7|\.exe)?\b'
                         r'|\bJoin-Path\b.*\bgam(?:\.exe)?\b')
-# gam as the first item of a quoted argument list: ["gam", "delete", ...], system('gam', 'delete'), execFileSync('gam', [...])
-GAM_LIST = re.compile(r'["\'](?:\S*[/\\])?gam(?:\.exe|\.py)?["\']\s*,')
-GAM_LIST_LITERAL = re.compile(r'((?:["\'][^"\']*["\']\s*,\s*\[?\s*)*["\'][^"\']*["\'])\s*[\])]')
+# gam as the first item of a quoted argument list: ["gam", "delete", ...], system('gam', 'delete'), execFileSync(`gam`, [...]),
+# an escaped \"gam\", inside another string, Ruby %w[gam ...]; anything but a plain literal list fails closed below
+GAM_LIST = re.compile(r'["\'`](?:\S*[/\\])?gam(?:\.exe|\.py)?\\?["\'`]\s*,|%[wW][\[({]\s*(?:\S*/)?gam\s')
+# a whole literal list: matching quotes, nothing after it but the end of the call or a keyword argument
+GAM_LIST_LITERAL = re.compile(r'((?:(["\'])[^"\']*\2\s*,\s*\[?\s*)*(["\'])[^"\']*\3)\s*[\])]\s*(?=\)|;|$|,\s*\w+\s*=)')
 GAM_INSIDE = re.compile(r'(?:^|[\s"\'(=])(?:\S*[/\\])?gam(?:\.exe|\.py)?\s+[A-Za-z]')
 CREDENTIAL_RE = re.compile(r'(?i)oauth2(?:service)?\.(?:txt|json)|client_secrets\.json')
 NETWORK_COMMANDS = {'curl', 'wget', 'invoke-webrequest', 'invoke-restmethod', 'iwr', 'irm', 'nc', 'ncat', 'scp', 'sftp',
@@ -1616,12 +1618,12 @@ class Checker:
                 if raw.lstrip().startswith('#'):
                     continue
                 for m in GAM_LIST.finditer(raw):
-                    # read only when the list is all string literals up to its closing bracket and a finding on
-                    # this line starts with exactly those words; a variable element ('gam', $v, ...) fails closed
+                    # read only when the list is a whole string-literal argument and a finding on this line has
+                    # exactly its words; a variable element ('gam', $v), or anything after the list, fails closed
                     lit = GAM_LIST_LITERAL.match(raw, m.start())
                     words = re.findall(r'["\']([^"\']*)["\']', lit.group(1)) if lit else None
                     if not words or not any(f.file == ctx.file and f.line == n and
-                                            f.command.split()[:len(words)] == words for f in findings):
+                                            f.command.split() == words for f in findings):
                         findings.append(Finding(ctx.file, n, UNKNOWN, 'runs gam from code the checker could not follow',
                                                 short([raw.strip()]), note='check what reads this line on its own'))
                         break
