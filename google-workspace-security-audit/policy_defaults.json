@@ -2,7 +2,8 @@
  "_comment": [
   "Default field values of Google's Cloud Identity Policy API: a setting still at its default is NOT returned by the API, so tenant_scope.py fills these in at the root org unit.",
   "Source: https://cloud.google.com/identity/docs/concepts/policy-api-concepts, section Default Field Values, read 2026-10-07. Defaults that Google says depend on the licence are left out.",
-  "Field names converted from the page's snake_case to the API's camelCase. Re-check against the page when Google changes it."
+  "Field names converted from the page's snake_case to the API's camelCase. Re-check against the page when Google changes it.",
+  "Left out (2026-11-04): the page's work_data_operation_type.* rows, which name no field, and enforced_from, which the page gives as the prose \"Unset\" rather than an API value."
  ],
  "defaults": {
   "api_controls.google_services": {
@@ -196,9 +197,6 @@
   "security.two_step_verification_device_trust": {
    "allowTrustingDevice": true
   },
-  "security.two_step_verification_enforcement": {
-   "enforcedFrom": "Unset"
-  },
   "security.two_step_verification_enforcement_factor": {
    "allowedSignInFactorSet": "ALL"
   },
@@ -210,30 +208,6 @@
   },
   "security.user_account_recovery": {
    "enableAccountRecovery": false
-  },
-  "work_data_operation_type.airdrop_sharing_allowed": {
-   "true": ""
-  },
-  "work_data_operation_type.contacts_items_assignment_allowed": {
-   "true": ""
-  },
-  "work_data_operation_type.files_access_allowed": {
-   "true": ""
-  },
-  "work_data_operation_type.files_printing_allowed": {
-   "true": ""
-  },
-  "work_data_operation_type.images_videos_saving_allowed": {
-   "true": ""
-  },
-  "work_data_operation_type.non_workspace_apps_copy_paste_allowed": {
-   "true": ""
-  },
-  "work_data_operation_type.non_workspace_apps_sharing_allowed": {
-   "true": ""
-  },
-  "work_data_operation_type.personal_accounts_sharing_allowed": {
-   "true": ""
   },
   "workspace_marketplace.apps_access_options": {
    "allowAllInternalApps": false

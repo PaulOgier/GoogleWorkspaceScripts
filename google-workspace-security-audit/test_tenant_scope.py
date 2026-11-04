@@ -1160,6 +1160,16 @@ class TestPolicyDefaults(PolicyTestCase):
     def by_type(self):
         return {(p["type"], p["ou"]): p for p in ts._policy_settings(self.ctx)}
 
+    def test_shipped_defaults_carry_no_scrape_artefacts(self):
+        """AUD-22: no field named "true", no prose values such as "Unset"."""
+        defaults = json.loads(ts.POLICY_DEFAULTS_FILE.read_text(
+            encoding="utf-8"))["defaults"]
+        for stype, fields in defaults.items():
+            for field, value in fields.items():
+                with self.subTest(setting=stype, field=field):
+                    self.assertNotIn(field, ("true", "false", ""))
+                    self.assertNotEqual("Unset", value)
+
     def test_shipped_defaults_file_loads(self):
         data = json.loads(ts.POLICY_DEFAULTS_FILE.read_text(encoding="utf-8"))
         self.assertTrue(data["defaults"]["gmail.auto_forwarding"][
