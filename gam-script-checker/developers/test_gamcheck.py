@@ -652,6 +652,16 @@ def test_audit_2026_11(checker):
         got = g.verdict(checker.check_text('gam info domain\nbash -e del.sh\n', '<t>', 'shell', [Path(d)]))
         if got != g.DESTRUCTIVE:
             failures.append(f'bash -e del.sh: got {g.LEVEL_NAMES[got]}')
+        # a mode tested before it is assigned, and arguments that come from xargs, are not read
+        (Path(d) / 'late.sh').write_text('if [ "$MODE" = "check" ]; then\n  gam print users\nelse\n'
+                                         '  gam delete user bob@example.com\nfi\nMODE=$1\n')
+        (Path(d) / 'rb.sh').write_text('MODE="${1:-check}"\ncase "$MODE" in\n  check) gam print users ;;\n'
+                                       '  go) gam delete user bob@example.com ;;\nesac\n')
+        for text, want in (('bash late.sh check', g.DESTRUCTIVE), ('xargs bash rb.sh < modes.txt', g.DESTRUCTIVE),
+                           ('bash rb.sh check', g.READ)):
+            got = g.verdict(checker.check_text(f'gam info domain\n{text}\n', '<t>', 'shell', [Path(d)]))
+            if got != want:
+                failures.append(f'{text}: got {g.LEVEL_NAMES[got]}, expected {g.LEVEL_NAMES[want]}')
     for text, lang, level, kind in AUDIT_2026_11:
         got = g.verdict(checker.check_text(text + '\n', '<t>', lang))
         if (kind == 'floor' and severity[got] < severity[level]) or (kind == 'exact' and got != level):

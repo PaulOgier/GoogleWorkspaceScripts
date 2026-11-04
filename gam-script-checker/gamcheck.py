@@ -960,6 +960,8 @@ class Context:
             return [Finding(self.file, line, UNKNOWN, f'runs {p.name}, a program file rather than a script', command)]
         at = next((i for i, t in enumerate(seg) if t.strip('`"\'') == script_tok), None)
         argv = [t for t in seg[at + 1:]] if at is not None else None
+        if at is not None and any(t.lower() in ('xargs', 'parallel', '-exec', '-execdir') for t in seg[:at]):
+            argv = None  # the arguments come from input the checker cannot see
         inner = self.checker.check_file(p, depth=self.depth + 1, argv=argv)
         for f in inner:
             f.note = '; '.join(n for n in (f.note, f'from {p.name} run at {self.file} line {line}') if n)
@@ -1182,6 +1184,7 @@ def _mode_scope(lines, argv):
         return None if re.search(r'[$`]', v) or re.fullmatch(r'\d*[<>|&;].*', v) else v
 
     modes = {str(k): arg(k, '', '') for k in range(1, 10)}
+    assigned_at = {}
     for n, t in toks.items():
         i = 0
         while i < len(t) and t[i] in ('export', 'readonly'):
@@ -1189,6 +1192,11 @@ def _mode_scope(lines, argv):
         m = MODE_ASSIGN.fullmatch(t[i]) if i < len(t) else None
         if m and n not in in_func and (i + 1 == len(t) or t[i + 1] == ';'):
             modes[m.group(1)] = arg(int(m.group(2) or m.group(3)), m.group(4) or '', m.group(5) or '')
+            assigned_at.setdefault(m.group(1), n)
+    for name, at in assigned_at.items():
+        # [ "$MODE" = go ] before MODE=$1 tests an empty MODE, not the argument
+        if any(name in VAR_REF.findall(' '.join(t)) for k, t in toks.items() if k < at):
+            modes[name] = None
     flat = '\n'.join(' '.join(t) for t in toks.values())
     if re.search(r'\bnocasematch\b', flat):
         return set(), 'mode argument not applied, every line counted: nocasematch changes how words compare'

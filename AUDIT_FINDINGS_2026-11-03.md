@@ -520,7 +520,7 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 - CONFIRMED (coordinator reproduced). 1492-1494 resolves one level with empty wrapper sets and drops the alias's own words after the first. `alias g7="gam"; alias zap="g7 delete"; g7 info domain; zap user bob@example.com` prints READ-ONLY; `alias zap="gam delete"; zap user bob@example.com` gives CANNOT TELL "incomplete gam command".
 - Fix: resolve aliases iteratively and keep the alias's trailing words as a prefix to the call's arguments.
 
-### CHK-10 `[ ]` Mode-word logic ignores where the assignment sits
+### CHK-10 `[x]` Mode-word logic ignores where the assignment sits
 - CONFIRMED (coordinator reproduced through a `bash x.sh check` runner line). `_mode_scope` 1028-1230 resolves `MODE=$1` wherever it appears, then evaluates every test with that value. A script that tests `$MODE` first and assigns `MODE=$1` afterwards prints READ-ONLY with "mode read from the arguments: MODE='check'", while bash tests an empty MODE and runs the delete. `test_modes` covers function ordering but not top-level ordering. Related (Medium): `xargs bash rb.sh < modes.txt` applies the `${1:-check}` default and prints READ-ONLY because `follow_script` (946) takes argv from the segment only.
 - Fix: an assignment that appears after any test of the same name sets `modes[name] = None`.
 
