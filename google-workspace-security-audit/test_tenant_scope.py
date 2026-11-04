@@ -1635,6 +1635,16 @@ class TestPreflightParsing(unittest.TestCase):
         self.assertNotIn("https://www.googleapis.com/auth/gmail.settings.basic",
                          passed)
 
+    def test_parse_serviceaccount_gam7_padded_lines(self):
+        """GAM 7.50.00 printPassFail: f'{scope:73} {result}', no comma."""
+        cal = "https://www.googleapis.com/auth/calendar"
+        gm = "https://www.googleapis.com/auth/gmail.settings.basic"
+        out = ("User: admin@example.com, Domain-wide Delegation Scopes (2)\n"
+               f"    {cal:73} PASS (1/2)\n"
+               f"    {gm:73} FAIL (2/2)\n"
+               f"    Hint: {gm} FAILED to open\n")
+        self.assertEqual(([cal], [gm]), ts.parse_serviceaccount_check(out))
+
     def test_header_only_detection(self):
         self.assertTrue(ts.is_header_only("Owner,id,name\n"))
         self.assertTrue(ts.is_header_only(""))
@@ -2401,6 +2411,33 @@ class TestMonthlyService(CtxTestCase):
         self.patch("open_report", lambda report, args: None)
         self.assertEqual(0, ts.run_tenant(args, dict(tenant, customer_id="C_A")))
         self.assertEqual(1, len(rendered))
+
+    def run_dwd_preflight(self, rc, out, err=""):
+        def fake_gam(args, **_):
+            if args == ["info", "domain"]:
+                return 0, ("Customer ID: C_A\n"
+                           "Primary Domain: example.com\n"), ""
+            if "serviceaccount" in args:
+                return rc, out, err
+            return 0, "GAM 7.48.22", ""
+        self.patch("locate_gam", lambda: "/usr/bin/gam")
+        self.patch("run_gam", fake_gam)
+        self.patch("https_reachable", lambda host: True)
+        mods = [{"key": "forwards", "tier": 2,
+                 "scopes": ["https://www.googleapis.com/auth/gmail.settings.basic"]}]
+        self.assertTrue(ts.preflight(self.ctx, mods))
+        return {r[0]: r[1] for r in self.ctx.manifest["preflight"]}
+
+    def test_serviceaccount_that_tested_nothing_is_not_verified(self):
+        """AUD-15: no PASS/FAIL lines is not "all scopes PASS"."""
+        rows = self.run_dwd_preflight(
+            2, "", "ERROR: Service Account: oauth2service.json, Does not exist")
+        self.assertIn("NOT VERIFIED", rows["Service account DWD scopes"])
+        self.assertIn("Does not exist", rows["Service account DWD scopes"])
+        scope = "https://www.googleapis.com/auth/gmail.settings.basic"
+        rows = self.run_dwd_preflight(0, f"    {scope:73} PASS\n")
+        self.assertEqual("all 1 required scopes PASS",
+                         rows["Service account DWD scopes"])
 
     def test_resume_against_the_same_customer_passes(self):
         self.ctx.manifest["meta"]["customer_id"] = "C_OLD"

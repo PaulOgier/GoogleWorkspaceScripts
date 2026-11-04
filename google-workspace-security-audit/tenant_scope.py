@@ -1159,12 +1159,14 @@ def parse_serviceaccount_check(output: str) -> Tuple[List[str], List[str]]:
         if not match:
             continue
         url = match.group(1).rstrip(",")
-        # Anchor on the ", PASS" / ", FAIL" cell, not any word starting with
-        # FAIL: a future "... FAILED to open" hint line would otherwise skip
-        # a module.
-        if re.search(r",\s*FAIL\b", line):
+        # Anchor on the PASS / FAIL cell right after the URL, not any word
+        # starting with FAIL: a "... FAILED to open" hint line would
+        # otherwise skip a module. GAM 7.50.00 prints the cell after padding
+        # spaces (printPassFail: f'{scope:73} {result}'); the comma form is
+        # kept for older output.
+        if re.search(r"^\s*https://\S+?,?\s+FAIL\b", line):
             failed.append(url)
-        elif re.search(r",\s*PASS\b", line):
+        elif re.search(r"^\s*https://\S+?,?\s+PASS\b", line):
             passed.append(url)
     return passed, failed
 
@@ -1350,6 +1352,14 @@ def preflight(ctx: RunContext, modules: List[Dict]) -> bool:
                 print_warning("DWD scopes missing. GAM printed the client ID "
                               "and Admin console path to authorise; see the "
                               "run log.")
+                ctx.stderr_log("preflight_dwd", combined)
+            elif rc != 0 or not set(needed) <= set(passed):
+                # GAM tested nothing (no service account file, an error
+                # before the checks): no PASS line is not a pass.
+                tail = (err or out).strip().splitlines()[-1:] or ["no output"]
+                table.append(("Service account DWD scopes",
+                              f"NOT VERIFIED (rc {rc}: {tail[0][:120]})",
+                              "Per-user modules will be attempted unverified"))
                 ctx.stderr_log("preflight_dwd", combined)
             else:
                 table.append(("Service account DWD scopes",
