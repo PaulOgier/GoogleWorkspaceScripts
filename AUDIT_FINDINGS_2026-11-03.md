@@ -70,7 +70,8 @@ No Critical finding. No path was found that suspends or deletes anyone other tha
 
 ## A1. High
 
-### OFF-01 `[ ]` Ctrl+C between an alias delete and its re-create destroys the alias
+### OFF-01 `[x]` Ctrl+C between an alias delete and its re-create destroys the alias
+- Done (`037dd31`): the create runs with bypass_shutdown; Ctrl+C is honoured between aliases and untouched aliases are a summary skip. Suite fence for test_offboard_main.py in 546c224.
 - Severity High. CONFIRMED (reproduced with a stub; loop re-read by the coordinator).
 - Where: `offboard_user.py:2936-2952` (`transfer_aliases`).
 - What happens: the loop runs `delete alias` (line 2936), then `create alias ... user <destination>` without `bypass_shutdown=True`. `run_gam` (line 993) refuses every non-bypass call once `shutdown_requested` is set. A Ctrl+C that lands after the delete makes the create return "Shutdown requested", the retry loop breaks on `shutdown_requested`, and the alias is gone. The error printed is loud and names the manual command, but the tenant is worse off than before the run on an interrupt the script says it handles gracefully. A second alias in the list is also reported as "will bounce until recreated" although it was never deleted.
@@ -79,7 +80,8 @@ No Critical finding. No path was found that suspends or deletes anyone other tha
 - Fix: once a delete has succeeded, run the create and its retry loop with `bypass_shutdown=True`; check `shutdown_requested` only before starting the next alias.
 - Test: the stub scenario above, asserting the create is issued and the alias lands in `moved`.
 
-### OFF-02 `[ ]` GYB access probe and mailbox-size estimate run against a suspended leaver before the temporary unsuspend
+### OFF-02 `[x]` GYB access probe and mailbox-size estimate run against a suspended leaver before the temporary unsuspend
+- Done (`67e1685`): check_gyb_access() split out; main runs it after the temporary unsuspend, on the destination in restore-only, never for scorched earth; a failure on a suspended account names the suspension. Owed: dev-tenant `gyb --action quota` against a suspended user, to confirm the failure shape.
 - Severity High. PLAUSIBLE for the trigger (Google refusing service-account impersonation of a suspended user, which is its documented behaviour), CONFIRMED for the ordering.
 - Where: `check_dependencies` runs `gyb --email <leaver> --action quota --service-account` at `offboard_user.py:1318-1328`, and `_estimate_mailbox_bytes` (`gam user X show drivesettings`, line 3233) at line 1360. `main()` calls `check_dependencies` at line 5092; the `update user ... suspended off` is at line 5190.
 - What happens: `need_gyb` is True whenever `--no-email` is absent, or `--backup-email` or `--reuse-email-backup` is set. For a suspended leaver the quota probe fails, `check_dependencies` prints "GYB service account cannot access <leaver>" with a domain-wide-delegation diagnosis and `main()` exits 2 before the unsuspend ever runs. The README's own example `python3 offboard_user.py --doit --unsuspend --user leaver@yourdomain.com` is this path. The disk-space preflight is also skipped silently for the same reason.
@@ -89,7 +91,8 @@ No Critical finding. No path was found that suspends or deletes anyone other tha
 - Fix: move the GYB probe (and the size estimate) after the temporary unsuspend when `--unsuspend` is set, or probe the destination mailbox for restore-only mode, and distinguish "account suspended" from "DWD not granted" in the message.
 - Test: `check_dependencies` with `need_gyb=True` against a suspended leaver plus `--unsuspend`, with the quota probe stubbed to fail only while suspended.
 
-### OFF-03 `[ ]` An interrupted run exits 0 with no trace in the summary, and later phases blame the destination
+### OFF-03 `[x]` An interrupted run exits 0 with no trace in the summary, and later phases blame the destination
+- Done (`5f2d722`): exit 130 (EXIT_INTERRUPTED) and a summary warning naming the last phase; checks between every transfer phase and before scorched deletion; delete_user says cancelled; second Ctrl+C exits 130. Pinned tests changed to 130; ScriptedGam now refuses calls after Ctrl+C like run_gam.
 - Severity High (two reviewers found it independently). CONFIRMED (reproduced through the repository's own `MainFlowCase` harness).
 - Where: `signal_handler` (708-716) records nothing; `_abort_if_shutdown` (5035-5038) calls `finish_run`, which returns `exit_code` untouched. `_abort_if_shutdown` runs before the transfer block and after calendar only; nothing sits between Drive, Shared Drive check, email, alias and calendar (5405-5420).
 - What happens: (a) `--doit --force --user L --all-transfer-to S` with the flag set during group listing ends with exit 0, empty `summary_errors` and `summary_warnings`, no `suspended on`, no licence removed, no transfers; the kill switch has scrambled the password so the account is contained but not suspended, and a scheduler reading the README's "0 = success" marks it done. A SIGTERM from a job timeout is the realistic trigger. `test_ctrl_c_during_kill_switch_still_completes_containment` asserts `code == 0`, so the README contract and the test disagree. (b) A Ctrl+C during the Drive transfer terminates GAM, then `migrate_email` validates the destination through `run_gam`, gets `(False, "Shutdown requested")` and records "Destination user not found: successor@" and "Email migration skipped: destination invalid"; alias transfer reports every alias FAILED and bouncing though none was touched; the Shared Drive check reports "inconclusive". The ticket log then states that a valid successor was not found. (c) On the scorched-earth path, `delete_user` after a Ctrl+C prints "CRITICAL: Deletion FAILED ... still exists" instead of "cancelled" (5355, 4537-4542).
@@ -98,40 +101,46 @@ No Critical finding. No path was found that suspends or deletes anyone other tha
 
 ## A2. Medium
 
-### OFF-04 `[ ]` "Unsuspend not verified" abort path can leave a started-suspended account active
+### OFF-04 `[x]` "Unsuspend not verified" abort path can leave a started-suspended account active
+- Done (`1b35841`): restore_original_suspension(always_issue=True) on the unverified-unsuspend abort; the abort goes through a summary error and finish_run.
 - Severity Medium. PLAUSIBLE (needs the propagation lag the script has itself observed); logic CONFIRMED.
 - Where: `restore_original_suspension` (1808-1815) returns True without issuing `suspended on` when a read says the account is still suspended; the abort branch in `main()` (5214-5220) calls it but no atexit guard is registered on that path (the `atexit.register` is only reached in the verified branch at 5212); the branch also `sys.exit(2)` without `finish_run`, so the restore outcome never reaches the summary or log footer.
 - What happens: `update user X suspended off` returns success but `wait_for_suspended(user_email, False)` (60 s) does not see the flip. The script's own notes record an unsuspend whose `Updated` reply took over 70 s to take effect (4588-4590) and a flip that read back after 54 s (1824-1827). If the unsuspend lands after the 60 s poll and after the guard's single read, the account ends ACTIVE, the log says "Restoring the original state and aborting", exit code 2. The same race exists if Ctrl+C is pressed during the 60 s poll.
 - Fix: in that branch always issue `suspended on` (idempotent) rather than trusting one read, or register the atexit guard before issuing the unsuspend; route the exit through `finish_run`.
 - Test: `restore_original_suspension` with a read that says suspended followed by a flip; the "Could not verify" branch is currently untested.
 
-### OFF-05 `[ ]` A corrected interactive destination typo still exits 1
+### OFF-05 `[x]` A corrected interactive destination typo still exits 1
+- Done (`b9af641`): validate_destination(record=False) from the interactive re-ask.
 - Severity Medium. CONFIRMED (reproduced).
 - Where: `validate_destination` (1600-1602) calls `summary_error` before `_plan_email` (1875-1878) re-asks; `exit_code` is never lowered.
 - What happens: answering `jon@` then `good@` gives the right plan but `summary_errors == ['Destination not found: jon@...']` and exit 1, which the README defines as "errors in one or more phases".
 - Fix: have `validate_destination` report the miss without recording a summary error when called from an interactive re-ask (pass a flag, or record the error only after the final answer).
 - Test: assert `exit_code == 0` and empty `summary_errors` after a corrected typo.
 
-### OFF-06 `[ ]` `--reuse-email-backup` never reconciles the backup against disk
+### OFF-06 `[x]` `--reuse-email-backup` never reconciles the backup against disk
+- Done (`e8def90`): verify_backup_complete() in the reuse branch, same early return.
 - Severity Medium. CONFIRMED by code reading.
 - Where: `migrate_email` 3609-3619 only checks that `msg-db.sqlite` exists; the normal path calls `verify_backup_complete()` and refuses a short backup.
 - What happens: a backup whose DB lists more messages than are on disk (antivirus that deletes rather than locks, a partial copy to another machine, a hand-trimmed folder) restores short; `to_send` (3782) is the on-disk count so the summary says "N restored of N on disk". GYB skips absent files with a warning and exits 0. README: "A backup that comes up short against GYB's own message database fails the run."
 - Fix: call `verify_backup_complete(backup_path)` in the reuse branch with the same early return.
 - Test: a reuse folder with one DB row missing on disk; assert refusal.
 
-### OFF-07 `[ ]` "Devices found and listed for review" lists nothing
+### OFF-07 `[x]` "Devices found and listed for review" lists nothing
+- Done (`0f4ac38`): the device CSV lines are printed and logged.
 - Severity Medium. CONFIRMED (reproduced).
 - Where: `manage_devices` 2451-2484 uses `capture_output=True`, so `run_gam` returns the CSV without logging it (1021-1022); the function only counts lines. The snapshot (2119-2125) does not capture devices either.
 - What happens: the `resourceId`/`deviceId` needed for the printed `gam update mobile <resourceId> ...` commands never reach the console or the log. README: "Mobile and ChromeOS devices are listed for review and action."
 - Fix: `logger.info(output)` when devices are found, or add the device CSVs to the snapshot JSON.
 
-### OFF-08 `[ ]` A failed or short Drive backup does not stop the Drive transfer
+### OFF-08 `[x]` A failed or short Drive backup does not stop the Drive transfer
+- Done (`74dc07c`): owner's call taken without asking (no questions until ship): the Drive transfer is held when --backup-drive failed; README says so.
 - Severity Medium. Behaviour CONFIRMED; whether it is a defect or a design choice is for the owner to decide.
 - Where: `run_phase("Drive backup (rclone)", ..., hold=transfer_failures)` at 5370-5371, then `transfer("drive", ...)` unconditionally at 5405; hold text at 5450-5463.
 - What happens: rclone reports `Duplicate object found in source`, the backup phase records an error and joins `transfer_failures`, the Drive transfer then moves everything to the successor. The end-of-run text says "Licences RETAINED so the failed transfer can be retried" and "Rename them in Drive and re-run", but after `transfer drive` the leaver owns nothing, so re-running rclone against the leaver can never complete the archive. No data is lost.
 - Fix: when `--backup-drive` was requested and the backup is in `transfer_failures`, either skip the Drive transfer (and say so) or change the hold wording to say the data is at the successor and the archive must be re-run there.
 
-### OFF-09 `[ ]` Command builder emits combinations the script rejects, and rejects one it accepts
+### OFF-09 `[x]` Command builder emits combinations the script rejects, and rejects one it accepts
+- Done (`babb08f`): (a) to (d) fixed, jsdom test extended (14 checks); per-shell quoting assertions left for OFF-26.
 - Severity Medium. CONFIRMED (jsdom probes; the coordinator verified the emitting lines and the parser checks).
 - (a) `--unsuspend` (builder line 683) together with `--no-suspend` (in `SKIP_FLAGS`, line 464) is emitted with Copy enabled and "Ready, command is valid"; `parse_args` refuses the pair (4989-4993).
 - (b) `--restore-batch-size 1` is emitted (builder only shows a note, 581-586); `parse_args` refuses 1 (4921-4926). The README (`1 to 100`) and the argparse help (`1-100`) also still say 1 is allowed.
