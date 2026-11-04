@@ -1768,6 +1768,16 @@ EXEC_CALLS = {'subprocess.run', 'subprocess.call', 'subprocess.check_call', 'sub
               'subprocess.Popen', 'subprocess.getoutput', 'subprocess.getstatusoutput', 'os.system', 'os.popen',
               'os.execvp', 'os.execv', 'os.spawnvp', 'asyncio.create_subprocess_exec',
               'asyncio.create_subprocess_shell'}
+# Where each os.exec*/spawn* call keeps its argument list: ('list', i) = args[i] is the list,
+# ('rest', i, j) = args[i:j or None] are the arguments one by one (arg0 is the program name).
+OS_ARGV = {'os.execv': ('list', 1), 'os.execvp': ('list', 1), 'os.execve': ('list', 1), 'os.execvpe': ('list', 1),
+           'os.execl': ('rest', 1, 0), 'os.execlp': ('rest', 1, 0), 'os.execle': ('rest', 1, -1),
+           'os.execlpe': ('rest', 1, -1), 'os.spawnv': ('list', 2), 'os.spawnvp': ('list', 2),
+           'os.spawnve': ('list', 2), 'os.spawnvpe': ('list', 2), 'os.spawnl': ('rest', 2, 0),
+           'os.spawnlp': ('rest', 2, 0), 'os.spawnle': ('rest', 2, -1), 'os.spawnlpe': ('rest', 2, -1),
+           'os.posix_spawn': ('list', 1), 'os.posix_spawnp': ('list', 1),
+           'asyncio.create_subprocess_exec': ('rest', 0, 0)}
+EXEC_CALLS |= set(OS_ARGV)
 PY_LOCAL = {
     'shutil.rmtree': (DESTRUCTIVE, 'deletes a local folder tree'),
     'os.remove': (CHANGES, 'deletes a local file'), 'os.unlink': (CHANGES, 'deletes a local file'),
@@ -1797,6 +1807,7 @@ class _PythonReader:
         self.parent = {}
         self.scopes = {}   # function node (or None for module level) -> {name: [assigned values]}
         self.local = {}
+        self.star = []     # modules imported with from x import *
 
     def run(self):
         for node in ast.walk(self.tree):
@@ -1808,7 +1819,10 @@ class _PythonReader:
                     self.aliases[n.asname or n.name] = n.name
             elif isinstance(node, ast.ImportFrom) and node.module:
                 for n in node.names:
-                    self.aliases[n.asname or n.name] = f'{node.module}.{n.name}'
+                    if n.name == '*':
+                        self.star.append(node.module)
+                    else:
+                        self.aliases[n.asname or n.name] = f'{node.module}.{n.name}'
             elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 if len(targets) == 1 and isinstance(targets[0], ast.Name):
@@ -1855,13 +1869,32 @@ class _PythonReader:
             node = self.parent.get(node)
         return node
 
-    def _name(self, func):
-        """Dotted name of a called function with import aliases resolved."""
+    def _name(self, func, depth=0):
+        """Dotted name of a called function with import aliases resolved.
+
+        A name bound to a run function (run = subprocess.run, partial(subprocess.run, ...)),
+        getattr(subprocess, "run") and a run function from a star import resolve to that function.
+        """
         if isinstance(func, ast.Name):
-            return self.aliases.get(func.id, func.id)
+            if func.id in self.aliases:
+                return self.aliases[func.id]
+            for value in (self.local.get(func.id) or self.scopes.get(None, {}).get(func.id) or []) if depth < 3 else []:
+                if isinstance(value, ast.Call) and self._name(value.func, depth + 1) in ('functools.partial', 'partial') \
+                        and value.args:
+                    value = value.args[0]
+                if isinstance(value, (ast.Name, ast.Attribute, ast.Call)):
+                    bound = self._name(value, depth + 1)
+                    if bound in EXEC_CALLS:
+                        return bound
+            star = next((f'{m}.{func.id}' for m in self.star if f'{m}.{func.id}' in EXEC_CALLS), None)
+            return star or func.id
         if isinstance(func, ast.Attribute):
-            base = self._name(func.value)
+            base = self._name(func.value, depth)
             return f'{base}.{func.attr}' if base else func.attr
+        if isinstance(func, ast.Call) and self._name(func.func, depth) == 'getattr' and len(func.args) >= 2:
+            attr = func.args[1]
+            if isinstance(attr, ast.Constant) and isinstance(attr.value, str):
+                return f'{self._name(func.args[0], depth)}.{attr.value}'
         return None
 
     def _const(self, name):
@@ -1962,6 +1995,14 @@ class _PythonReader:
 
     def _exec_argv(self, call, params=()):
         """For a subprocess/os call, return (tokens, via_shell) or (None, ...) when unreadable."""
+        shape = OS_ARGV.get(self._name(call.func) or '')
+        if shape and shape[0] == 'list':
+            return (self._argv(call.args[shape[1]], params) if len(call.args) > shape[1] else None), False
+        if shape:
+            rest = call.args[shape[1]:shape[2] or None]
+            if any(isinstance(a, ast.Starred) for a in rest) or not rest:
+                return None, False
+            return self._argv(ast.List(elts=rest, ctx=ast.Load()), params), False
         target = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg in ('args', 'command', 'cmd')), None)
         if target is None:
             return None, False
@@ -2128,12 +2169,15 @@ class _PythonReader:
             if not isinstance(node, ast.List) or id(node) in self.consumed or len(node.elts) < 2:
                 continue
             first = node.elts[0]
-            if not (isinstance(first, ast.Constant) and isinstance(first.value, str) and first.value.lower() in starts):
+            if not (isinstance(first, ast.Constant) and isinstance(first.value, str) and
+                    (first.value.lower() in starts or _gam_name(first.value.strip(), set(), set()))):
                 continue
             self.local = self.scopes.get(self._enclosing(node), {})
             toks = self._argv(node)
             if not toks or any(isinstance(t, _Splat) for t in toks):
                 continue
+            if self._is_gam(toks[0]):
+                toks = toks[1:]  # ["gam", "delete", ...] kept as data: the command after gam
             for f in gp.parse(toks, self.ctx, node.lineno):
                 if f.what.startswith(('not a command', 'incomplete', 'the gam command itself')):
                     continue

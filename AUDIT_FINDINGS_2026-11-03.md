@@ -524,7 +524,7 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 - CONFIRMED (coordinator reproduced through a `bash x.sh check` runner line). `_mode_scope` 1028-1230 resolves `MODE=$1` wherever it appears, then evaluates every test with that value. A script that tests `$MODE` first and assigns `MODE=$1` afterwards prints READ-ONLY with "mode read from the arguments: MODE='check'", while bash tests an empty MODE and runs the delete. `test_modes` covers function ordering but not top-level ordering. Related (Medium): `xargs bash rb.sh < modes.txt` applies the `${1:-check}` default and prints READ-ONLY because `follow_script` (946) takes argv from the segment only.
 - Fix: an assignment that appears after any test of the same name sets `modes[name] = None`.
 
-### CHK-11 `[ ]` Python: exec entry points rebound through assignment, `partial`, `getattr`, star import or `os.exec*` are missed
+### CHK-11 `[x]` Python: exec entry points rebound through assignment, `partial`, `getattr`, star import or `os.exec*` are missed
 - CONFIRMED (coordinator reproduced the first form). `_name` 1646-1652 resolves import aliases only; `EXEC_CALLS` 1555-1558 has `execv`/`execvp` but not `execl`/`execlp`/`execle`/`spawnl*`/`posix_spawn`; `_argument_lists` ignores lists whose first element is `gam`. Each with a read-only call above prints READ-ONLY:
   ```
   run = subprocess.run; run(["gam", "delete", "user", "bob@example.com"])
@@ -560,7 +560,7 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 - **CHK-20** `gamx` is accepted by `fetch_group_corpus.py`'s regex but not in `GAM_NAMES` (258): a script using only `gamx` reads "no gam commands found".
 - **CHK-21** Over-warnings worth trimming: `gam print users query "todrive"` is CHANGES (834 checks `words`, not `flags`); `gam sync device json x assigntype user preview` and `gam update group x delete member all users preview` are DESTRUCTIVE because `user`/`users` are value keywords that swallow `preview` in `_flags` (871); `gam user x sync groups addonly` is DESTRUCTIVE (first word skipped as the target); `Start-Process -FilePath gam -ArgumentList "..."` is worded "not a command GAM7 recognises ('-ArgumentList')" instead of the README's "handed to another program".
 - **CHK-22** Wording: `gam user x delete messages id 1` is described as "dry run, would have: deletes Gmail messages"; GAM 7.48.20 accepts only `ids`, so GAM stops with an error and "dry run" is misleading. Same for `transfer ownership 1abc preview` (preview read as the user).
-- **CHK-23** `asyncio.create_subprocess_exec("gam", "delete", ...)` and positional `subprocess.Popen("gam", ...)` give "gam with no arguments visible" (`_exec_argv` 1753 reads `args[0]` only). CANNOT TELL, so safe, but easily DESTRUCTIVE.
+- [x] **CHK-23** `asyncio.create_subprocess_exec("gam", "delete", ...)` and positional `subprocess.Popen("gam", ...)` give "gam with no arguments visible" (`_exec_argv` 1753 reads `args[0]` only). CANNOT TELL, so safe, but easily DESTRUCTIVE.
 - **CHK-24** A directory passed as the script prints "file not found" (exit 2 is right). README table lists `.txt`; `.gam` is also read (1283).
 
 ### CHK-T01 `[ ]` Fixtures and tests to add
