@@ -169,7 +169,7 @@ Changelog
                         as it arrives; backup folders are chosen with the plan.
                         Command builder: the combinations the script refuses
                         are refused, restore-only works, PowerShell trailing
-                        backslashes are doubled. 278 tests.
+                        backslashes are doubled. 281 tests.
   2026-10-21 - v5.7.2 - Scorched earth no longer deletes the account when the
                         Shared Drive list cannot be read or parsed; it refuses
                         (exit 2), as it already did for an unreadable drive ACL.
