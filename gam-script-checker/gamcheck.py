@@ -314,11 +314,8 @@ FILE_COMMANDS = {'[', '[[', 'test', 'cp', 'mv', 'ls', 'ln', 'rm', 'rmdir', 'mkdi
 GAM_LOOKUP = re.compile(r'(?i)\b(?:which|command\s+-v|type\s+-p|Get-Command|where(?:\.exe)?)\s+["\']?gam(?:7|\.exe)?\b'
                         r'|\bJoin-Path\b.*\bgam(?:\.exe)?\b')
 # gam as the first item of a quoted argument list: ["gam", "delete", ...], system('gam', 'delete'), execFileSync(`gam`, [...]),
-# an escaped \"gam\", inside another string, Ruby %w[gam ...]; anything but a plain literal list fails closed below
+# an escaped \"gam\", inside another string, Ruby %w[gam ...]
 GAM_LIST = re.compile(r'["\'`](?:\S*[/\\])?gam(?:\.exe|\.py)?\\?["\'`]\s*,|%[wW][\[({]\s*(?:\S*/)?gam\s')
-# a whole literal list: matching quotes, nothing after it but the end of the call or a keyword argument that does
-# not change what runs (executable=, preexec_fn= and shell= do, so they fail closed)
-GAM_LIST_LITERAL = re.compile(r'((?:(["\'])[^"\']*\2\s*,\s*\[?\s*)*(["\'])[^"\']*\3)\s*[\])]\s*(?=\)|;|$|,\s*(?:check|capture_output|text|cwd|env|timeout|stdin|stdout|stderr|encoding|errors|input|universal_newlines)\s*=(?![=>~]))')
 GAM_INSIDE = re.compile(r'(?:^|[\s"\'(=])(?:\S*[/\\])?gam(?:\.exe|\.py)?\s+[A-Za-z]')
 CREDENTIAL_RE = re.compile(r'(?i)oauth2(?:service)?\.(?:txt|json)|client_secrets\.json')
 NETWORK_COMMANDS = {'curl', 'wget', 'invoke-webrequest', 'invoke-restmethod', 'iwr', 'irm', 'nc', 'ncat', 'scp', 'sftp',
@@ -1526,7 +1523,7 @@ class Checker:
     def _shell_like(self, text, lang, ctx, argv=None):
         lines = _logical_lines(text, lang)
         gam_vars, wrappers, wrapper_lines = self._shell_aliases(lines, lang)
-        findings, code_lines = [], []
+        findings, code_lines, py_lines = [], [], set()
         if lines.unclosed:
             # a heredoc that never ends is most likely an end marker this reader got wrong, so the
             # quoting of every line after it is in doubt
@@ -1570,6 +1567,7 @@ class Checker:
                     if isinstance(doc, str):
                         findings.append(Finding(ctx.file, n, UNKNOWN, doc, short(seg), note='check the Python it runs on its own'))
                     elif doc:
+                        py_lines.update(m for m, _ in doc)
                         for f in self.check_text('\n'.join(t for _, t in doc) + '\n', ctx.file, 'python',
                                                  ctx.base_dirs, ctx.depth + 1):
                             f.line = doc[f.line - 1][0] if 0 < f.line <= len(doc) else n
@@ -1613,21 +1611,13 @@ class Checker:
             findings[0].what = mode_note.replace('{set_aside}', str(sum(f.aside == 'not-run' and f.command.startswith('gam') for f in findings)))
         findings.extend(self._credentials(code_lines, ctx))
         if lang != 'gambatch':
-            # Fails closed: a list that runs gam (a heredoc body, a -c string, perl or node code) on a line the
-            # readers above gave nothing for was not followed, whatever program reads it (uv run, alias, $(...))
+            # Fails closed: a gam argument list (a heredoc body, a -c string, perl or node code) on a line the Python
+            # reader did not parse as a heredoc body was not followed, whatever reads it (uv run, alias, $(...));
+            # the Python reader judges its own lines and fails closed on what it cannot resolve
             for n, raw in enumerate(text.splitlines(), 1):
-                if raw.lstrip().startswith('#'):
-                    continue
-                for m in GAM_LIST.finditer(raw):
-                    # read only when the list is a whole string-literal argument and a finding on this line has
-                    # exactly its words; a variable element ('gam', $v), or anything after the list, fails closed
-                    lit = GAM_LIST_LITERAL.match(raw, m.start())
-                    words = re.findall(r'["\']([^"\']*)["\']', lit.group(1)) if lit else None
-                    if not words or not any(f.file == ctx.file and f.line == n and
-                                            f.command.split() == words for f in findings):
-                        findings.append(Finding(ctx.file, n, UNKNOWN, 'runs gam from code the checker could not follow',
-                                                short([raw.strip()]), note='check what reads this line on its own'))
-                        break
+                if n not in py_lines and not raw.lstrip().startswith('#') and GAM_LIST.search(raw):
+                    findings.append(Finding(ctx.file, n, UNKNOWN, 'runs gam from code the checker could not follow',
+                                            short([raw.strip()]), note='check what reads this line on its own'))
         if not any(f.command.startswith('gam') for f in findings) and ctx.depth == 0:
             findings.append(Finding(ctx.file, 0, UNKNOWN, f'no gam commands found in {len(lines)} lines',
                                     note='if this script does run gam, the checker could not see how'))
@@ -2312,7 +2302,11 @@ class _PythonReader:
         target = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg in ('args', 'command', 'cmd')), None)
         if target is None:
             return None, False
-        return self._argv(target, params), any(k.arg == 'shell' for k in call.keywords)
+        toks = self._argv(target, params)
+        if toks and any(k.arg in ('executable', 'preexec_fn') for k in call.keywords):
+            # executable= runs that program with this argv, so argv[0] naming gam proves nothing
+            toks = [Dyn('{program chosen by executable=}')] + list(toks[1:])
+        return toks, any(k.arg == 'shell' for k in call.keywords)
 
     def _is_gam(self, tok):
         if isinstance(tok, _Splat):
