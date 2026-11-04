@@ -678,7 +678,7 @@ class TestTemporaryUnsuspend(MainFlowCase):
                                  quota=self._quota_while_active(gam, []))
         self.assertEqual(code, 2)
         self.assertEqual(gam.writes(), [])
-        self.assertTrue(any("which is suspended" in p and "--unsuspend" in p
+        self.assertTrue(any("(suspended)" in p and "--unsuspend" in p
                             for p in printed), printed)
 
     def test_unverified_unsuspend_reissues_suspension_and_says_so(self):

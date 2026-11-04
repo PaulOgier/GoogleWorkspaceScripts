@@ -1261,10 +1261,10 @@ def check_gyb_access(user_email: str, skip_disk_check: bool = False,
     """Check GYB's service account can open `user_email`'s mailbox, and that
     the backup volume has room for it (skipped with `skip_disk_check`).
 
-    main() calls this only once the mailbox is reachable: after a temporary
-    unsuspend, and against the restore destination in restore-only mode.
-    Run against a suspended leaver it fails, and the old DWD diagnosis sent
-    the operator to the wrong fix (OFF-02). `suspended` names that cause.
+    main() calls this after a temporary unsuspend, and against the restore
+    destination in restore-only mode. On dev (2026-11-04, GYB 1.95) `quota`
+    and `count` both succeeded on a suspended, licensed user, so suspension
+    alone is not a known cause; `suspended` only adds it to the message.
     """
     print_info(f"Verifying GYB service account access for {user_email}...")
     try:
@@ -1282,9 +1282,11 @@ def check_gyb_access(user_email: str, skip_disk_check: bool = False,
             first = output.splitlines()[0] if output else 'no output'
             if suspended:
                 print_error(
-                    f"GYB service account cannot access {user_email}, which "
-                    f"is suspended. Add --unsuspend, or --no-email to skip "
-                    f"the mailbox. Output: {first}"
+                    f"GYB service account cannot access {user_email} "
+                    f"(suspended). Check domain-wide delegation for the GYB "
+                    f"service account; if the output names the suspension, "
+                    f"add --unsuspend, or --no-email to skip the mailbox. "
+                    f"Output: {first}"
                 )
             else:
                 print_error(
