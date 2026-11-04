@@ -74,7 +74,7 @@ There are two ways to use it:
 - **Paste mode** checks a command or a few commands you copied from somewhere (a web page, a chat, an email).
 - **File mode** checks a whole script saved as a file (`.sh`, `.ps1`, `.bat`, `.cmd`, `.py` or a gam batch `.txt`).
 
-Use file mode for any script with blank lines in it: a blank line ends a paste.
+Use file mode for any script with blank lines in it: a blank line ends a paste. Lines that arrive within a second of that blank line are still checked, and whatever is left is thrown away so your shell cannot run it unchecked. A paste that stalls for longer, over a slow remote connection for example, can still leave lines behind.
 
 ## Mac
 
@@ -217,9 +217,9 @@ A command written for GAMADV-XTD3 or legacy GAM that GAM7 no longer accepts is n
 | `.ps1` | `gam ...`, `& $gam ...`, `Set-Alias`, functions passing `@args` |
 | `.bat`, `.cmd` | `gam ...`, `%GAM% ...` |
 | `.py` | `subprocess` and `os.system` calls, wrapper functions such as `def gam(*args)`, gam command strings and argument lists kept as data |
-| `.txt` | GAM batch files (`gam batch`, `gam tbatch`), including `execute` lines |
+| `.txt`, `.gam` | GAM batch files (`gam batch`, `gam tbatch`), including `execute` lines |
 
-`gam csv`, `gam loop`, `gam batch` and `gam tbatch` are followed into the command they repeat or the file they run.
+`gam csv`, `gam loop`, `gam batch` and `gam tbatch` are followed into the command they repeat or the file they run. Python fed from a heredoc in a shell script (`python3 - <<'EOF'`) is read as Python.
 
 A line that runs another script (`python3 audit.py`, `bash ./offboard.sh`, `pwsh -File x.ps1`, `./x.sh`) is followed into that script when it exists on this computer, so a one-line paste that starts a script gets the script's verdict. `~` and `$HOME` are expanded; a path built from any other variable, or a script that is not there, reads as CANNOT TELL.
 

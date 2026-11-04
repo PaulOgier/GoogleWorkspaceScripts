@@ -39,7 +39,7 @@ YOU ASSUME ALL RISK ASSOCIATED WITH THE USE OF THIS SOFTWARE.
 Author:       Paul Ogier
 Created:      2026-09-13
 Updated:      2026-11-03
-Version:      0.4.6
+Version:      0.4.7
 Status:       Pre-release
 Python:       3.9+
 Dependencies: None. Stdlib only; never runs gam or the script it checks.
@@ -73,7 +73,7 @@ import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
-__version__ = '0.4.6'
+__version__ = '0.4.7'
 
 HERE = Path(__file__).resolve().parent
 VERBS_DIR = HERE / 'verbs'

