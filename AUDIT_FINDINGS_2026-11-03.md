@@ -223,6 +223,12 @@ No Critical finding. No path was found that suspends or deletes anyone other tha
 - Independent read-only review of `546c224`..`41fcef0`: no High. Six findings, all held and fixed in `7d4d8f7`: a Ctrl+C during forwarding or auto-reply still exited 1 with licence removal and suspension recorded as failed (OFF-03); a Ctrl+C reaching the gam child mid alias delete could still destroy the alias, and a delete refused before it ran was reported as bouncing (OFF-01); the OFF-08 hold message on a run with no Drive transfer; a failed alias read at the interactive re-ask left exit 1 (OFF-05); the OFF-11 decoder was never flushed; a test path was relative on Python 3.8. Count 278 in `ddfa6fe`. Suites green on 3.15, 3.9 and 3.8.
 - A4: run_gam stdin closed (`71b36eb`); the other A4 items are open.
 
+### VM phase, dev tenant (2026-11-04)
+- OFF-02: GYB quota and count succeed on a suspended, licensed dev user, so the trigger did not reproduce; the reorder stays, the message no longer names suspension as the cause (`dc29782`). A live `--doit --unsuspend` mailbox migration completed on Linux.
+- OFF-03: SIGINT mid-run on macOS exits 130 with the interruption in the summary. A gam write killed by the SIGINT had landed while the summary said failed; run_gam now reports such a call as outcome unknown (`203d438`).
+- OFF-19: `imap off` / `pop off` verified on a dev user. OFF-26: verified on Windows PowerShell 5.1, with a control.
+- Second review round: `f50b58b`, `83dc619`, `c1c38ca`; 287 tests.
+
 ## A4. Improvements (not defects)
 
 - `run_gam` (1004) does not pass `stdin=subprocess.DEVNULL`, unlike `run_gyb`; `run_gam_parallel` runs up to six gam processes sharing the terminal's stdin, so any gam prompt would hang to the timeout.
