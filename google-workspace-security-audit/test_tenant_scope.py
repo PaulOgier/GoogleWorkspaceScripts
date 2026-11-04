@@ -2573,6 +2573,25 @@ class TestMonthlyService(CtxTestCase):
         self.assertEqual("all 1 required scopes PASS",
                          rows["Service account DWD scopes"])
 
+    def test_dry_run_calls_only_version_and_info_domain(self):
+        """AUD-35: the README lists only those two gam calls."""
+        calls = []
+
+        def fake_gam(args, **_):
+            calls.append(args[:2])
+            if args == ["info", "domain"]:
+                return 0, ("Customer ID: C_A\n"
+                           "Primary Domain: example.com\n"), ""
+            return 0, "GAM 7.48.22", ""
+        self.patch("locate_gam", lambda: "/usr/bin/gam")
+        self.patch("run_gam", fake_gam)
+        self.patch("https_reachable", lambda host: True)
+        self.ctx.args.dry_run = True
+        mods = [{"key": "forwards", "tier": 2,
+                 "scopes": ["https://www.googleapis.com/auth/gmail.settings.basic"]}]
+        self.assertTrue(ts.preflight(self.ctx, mods))
+        self.assertEqual([["version"], ["info", "domain"]], calls)
+
     def test_resume_against_the_same_customer_passes(self):
         self.ctx.manifest["meta"]["customer_id"] = "C_OLD"
         self.stub_gam_for("C_OLD")
@@ -3966,6 +3985,13 @@ class TestParseArgsGuards(unittest.TestCase):
             with self.assertRaises(SystemExit) as stop:
                 ts.signal_handler(2, None)
         self.assertEqual(130, stop.exception.code)
+
+    def test_compare_with_must_be_a_directory(self):
+        """AUD-34."""
+        self.assertRejects(["--compare-with", "/nonexistent/typo_dir"])
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(Path(d),
+                             ts.parse_args(["--compare-with", d]).compare_with)
 
     def test_tenant_and_all_are_exclusive(self):
         self.assertRejects(["--tenant", "a", "--all"])

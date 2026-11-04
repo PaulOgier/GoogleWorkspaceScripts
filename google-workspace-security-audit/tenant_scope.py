@@ -1327,7 +1327,12 @@ def preflight(ctx: RunContext, modules: List[Dict]) -> bool:
                     return False
 
     # Gate 4 (degrade): authorisation for the DWD modules actually selected.
-    if ok:
+    if ok and getattr(args, "dry_run", False):
+        # The README promises a dry run calls only gam version and info
+        # domain.
+        table.append(("Authorisation (oauth info, DWD scopes)",
+                      "NOT CHECKED (--dry-run)", "-"))
+    elif ok:
         rc, out, err = run_gam(["oauth", "info"], timeout=120)
         if rc == 0:
             granted = len(re.findall(r"https://", out))
@@ -7025,6 +7030,9 @@ def parse_args(argv=None):
         parser.error("--grant-temp-access needs --admin")
     if args.tenant and args.all:
         parser.error("--tenant and --all are alternatives")
+    if args.compare_with and not args.compare_with.is_dir():
+        # A typo compared against nothing: "up from 0" on every tile.
+        parser.error(f"--compare-with {args.compare_with} is not a directory")
     if args.all and (args.run_dir or args.compare_with):
         parser.error("--run-dir and --compare-with name one tenant's runs; "
                      "use --tenant with them")
