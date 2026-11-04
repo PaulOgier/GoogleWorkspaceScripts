@@ -169,7 +169,7 @@ Changelog
                         as it arrives; backup folders are chosen with the plan.
                         Command builder: the combinations the script refuses
                         are refused, restore-only works, PowerShell trailing
-                        backslashes are doubled. 287 tests.
+                        backslashes are doubled. 288 tests.
   2026-10-21 - v5.7.2 - Scorched earth no longer deletes the account when the
                         Shared Drive list cannot be read or parsed; it refuses
                         (exit 2), as it already did for an unreadable drive ACL.
@@ -4830,7 +4830,8 @@ def suspend_user(email: str, dry_run: bool, bypass_shutdown: bool = False) -> bo
         ["update", "user", email, "suspended", "on"],
         dry_run=dry_run, bypass_shutdown=bypass_shutdown
     )
-    if not ok and started_before_ctrl_c and shutdown_requested:
+    # "Shutdown requested": run_gam refused the call (Ctrl+C after the sample above), so nothing was written
+    if not ok and started_before_ctrl_c and shutdown_requested and out != "Shutdown requested":
         # Ctrl+C reached the gam child; the write may have landed, so read it.
         ok = wait_for_suspended(email, True, timeout=30, bypass_shutdown=True)
         if ok:

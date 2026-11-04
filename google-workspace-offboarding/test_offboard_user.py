@@ -941,6 +941,22 @@ class TestSuspension(OffboardTestCase):
         self.assertFalse(offb.summary_errors)
         self.assertIn("after Ctrl+C", self.actions())
 
+    def test_ctrl_c_refused_by_run_gam_reads_nothing_back(self):
+        """Review: a Ctrl+C landing after the suspension sampled the flag makes run_gam refuse
+        the call; nothing was written, so there is nothing to read back."""
+        reads = []
+
+        def update(_args, _kw):
+            offb.shutdown_requested = True
+            return False, "Shutdown requested"
+
+        def info(_args, _kw):
+            reads.append(1)
+            return True, SUSPENDED_USER
+        with gam(FakeGam([(("update",), update), (("info", "user"), info)])), clocked():
+            self.assertFalse(offb.suspend_user(U, dry_run=False))
+        self.assertEqual([], reads)
+
     def test_ctrl_c_during_the_read_back_still_verifies(self):
         """Final review: the read-back was refused after Ctrl+C, so a landed
         suspension was reported as NOT verified."""
