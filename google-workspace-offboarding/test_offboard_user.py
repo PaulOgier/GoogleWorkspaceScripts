@@ -660,6 +660,7 @@ class TestPlan(OffboardTestCase):
             plan = offb.collect_plan(args, dest_map, False, False, source=U)
         pe.assert_called_once_with("Email migration destination email",
                                    allow_group=False, source=U, needs_mailbox=True)
+        plan["email"].pop("backup_path", None)  # chosen at plan time (OFF-18)
         self.assertEqual(plan["email"], {"do": True, "dest": D, "strip_labels": True})
 
 
@@ -2010,6 +2011,34 @@ class TestEmailBackupRestore(OffboardTestCase):
         actions = [c[0][0][3] for c in gyb.call_args_list]
         self.assertEqual(actions, ["backup"])
         self.assertNotIn("Email migrated", self.actions())
+
+    def test_archive_is_not_claimed_when_the_backup_fails_verification(self):
+        """OFF-17: "Email archive: covered" was recorded before the migration ran."""
+        def short_verify(path):
+            offb.summary_error(f"Backup at {path} is missing 2 message(s)")
+            return (5, 3)
+
+        with mock.patch.object(offb, "BACKUP_DIRECTORY", self.root), \
+             gam(self._dest_gam()), \
+             mock.patch.object(offb, "run_gyb", return_value=(True, "")), \
+             mock.patch.object(offb, "verify_backup_complete", side_effect=short_verify):
+            offb.migrate_email(U, D, dry_run=False, force=True, archive_note=True)
+        self.assertFalse(any("Email archive" in a for a in offb.summary_actions))
+
+    def test_a_folder_chosen_at_plan_time_is_not_asked_about_again(self):
+        """OFF-18: the phase prompted "sync into it?" after the plan was confirmed."""
+        prior = self.root / "mailboxes" / f"{U}_20260101"
+        prior.mkdir(parents=True)
+        msg_db(prior, [])
+
+        def no_prompt(*_a, **_k):
+            raise AssertionError("prompted mid-run")
+        with mock.patch.object(offb, "BACKUP_DIRECTORY", self.root), \
+             gam(self._dest_gam()), \
+             mock.patch.object(offb, "run_gyb", return_value=(True, "")), \
+             mock.patch.object(offb, "prompt_yes_no", no_prompt):
+            offb.migrate_email(U, D, dry_run=True, backup_path=prior)
+            offb.backup_drive_rclone(U, dry_run=True, backup_path=self.root / "d")
 
     def _reusable_backup(self, emls=2):
         (self.b / "2026" / "1").mkdir(parents=True)

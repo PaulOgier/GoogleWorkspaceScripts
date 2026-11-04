@@ -2067,6 +2067,15 @@ def collect_plan(args, dest_map: Dict[str, Optional[str]],
             default=is_2sv_enforced)
         plan["turnoff2sv"] = {"do": not skip}
 
+    # Backup folders are chosen here, where a "resume into the existing
+    # backup?" question belongs; asked inside a phase it stalled the run the
+    # operator had already confirmed as unattended (OFF-18).
+    if source:
+        if plan["email"].get("do"):
+            plan["email"]["backup_path"] = _select_email_backup_path(source, force=args.force)
+        if getattr(args, "backup_drive", False):
+            plan["drive_backup_path"] = _select_drive_backup_path(source, force=args.force)
+
     return plan
 
 
@@ -2100,6 +2109,10 @@ def print_plan(plan: Dict[str, dict]) -> None:
     print_warning("        The user loses access immediately and irreversibly.")
     line("Transfer Drive files", plan["drive"])
     line("Migrate email", plan["email"])
+    if plan["email"].get("backup_path"):
+        print_info(f"         GYB backup folder: {plan['email']['backup_path']}")
+    if plan.get("drive_backup_path"):
+        print_info(f"  [YES] Drive backup (rclone) -> {plan['drive_backup_path']}")
     if plan["email"].get("do"):
         mode = "strip labels + archive" if plan["email"]["strip_labels"] else "keep labels + INBOX"
         print_info(f"         label handling: {mode}")
@@ -3681,7 +3694,8 @@ def next_restore_action(progressed: int, gyb_output: str, newly_quarantined: int
 
 def migrate_email(source: str, destination: str, dry_run: bool, strip_labels: bool = True,
                   reuse_backup: Optional[Path] = None, batch_size: int = RESTORE_BATCH_SIZE,
-                  force: bool = False):
+                  force: bool = False, backup_path: Optional[Path] = None,
+                  archive_note: bool = False):
     """
     [OPTIONAL] Back up and restore email using GYB.
 
@@ -3731,7 +3745,8 @@ def migrate_email(source: str, destination: str, dry_run: bool, strip_labels: bo
                             "Re-run the backup, or restore from a complete copy.")
                 return
     else:
-        backup_path = _select_email_backup_path(source, force=force)
+        if backup_path is None:
+            backup_path = _select_email_backup_path(source, force=force)
         if not dry_run:
             backup_path.mkdir(parents=True, exist_ok=True)
 
@@ -3760,6 +3775,11 @@ def migrate_email(source: str, destination: str, dry_run: bool, strip_labels: bo
                 print_error("Backup failed verification; restore skipped. "
                             "Re-run to fetch the missing messages.")
                 return
+        if archive_note:
+            # --backup-email is served by this backup; claim it only now that
+            # it exists and verified (OFF-17).
+            summary_action(f"Email archive: covered by the migration's retained "
+                           f"GYB backup at {backup_path}")
 
     # Pre-flight the destination before spending hours on a doomed restore.
     if not check_restore_destination_ready(destination, backup_path, dry_run):
@@ -4435,7 +4455,8 @@ def _select_drive_backup_path(email: str, force: bool = False) -> Path:
                                "Drive", "syncing", force)
 
 
-def backup_drive_rclone(email: str, dry_run: bool, force: bool = False) -> bool:
+def backup_drive_rclone(email: str, dry_run: bool, force: bool = False,
+                        backup_path: Optional[Path] = None) -> bool:
     """
     [RECOMMENDED] Back up user's Drive to local disk via rclone.
 
@@ -4447,7 +4468,8 @@ def backup_drive_rclone(email: str, dry_run: bool, force: bool = False) -> bool:
     """
     print_header("DRIVE BACKUP (RCLONE)")
 
-    backup_path = _select_drive_backup_path(email, force=force)
+    if backup_path is None:
+        backup_path = _select_drive_backup_path(email, force=force)
     if not dry_run:
         backup_path.mkdir(parents=True, exist_ok=True)
 
@@ -5534,7 +5556,8 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
     # These run even with --no-transfer so you can archive without moving data.
     if args.backup_drive:
         run_phase("Drive backup (rclone)", backup_drive_rclone, user_email, dry_run,
-                  force=args.force, hold=transfer_failures)
+                  force=args.force, backup_path=plan.get("drive_backup_path"),
+                  hold=transfer_failures)
 
     if args.backup_email:
         if plan["email"]["do"]:
@@ -5546,10 +5569,6 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
                 "Skipping the separate --backup-email download: the email "
                 "migration below makes the same GYB backup and retains it "
                 f"under {BACKUP_DIRECTORY / 'mailboxes'}."
-            )
-            summary_action(
-                "Email archive: covered by the migration's retained GYB "
-                f"backup under {BACKUP_DIRECTORY / 'mailboxes'}"
             )
         else:
             run_phase("Email backup (GYB, local only)", backup_email_only,
@@ -5588,7 +5607,9 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
 
     transfer("email", "Email migration", migrate_email,
              strip_labels=plan["email"]["strip_labels"],
-             batch_size=args.restore_batch_size, force=args.force)
+             batch_size=args.restore_batch_size, force=args.force,
+             backup_path=plan["email"].get("backup_path"),
+             archive_note=bool(args.backup_email))
     _abort_if_shutdown(dry_run, "the email migration")
     transfer("alias", "Alias transfer", transfer_aliases)
     _abort_if_shutdown(dry_run, "the alias transfer")

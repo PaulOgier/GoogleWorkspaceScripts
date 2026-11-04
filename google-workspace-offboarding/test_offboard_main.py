@@ -512,6 +512,19 @@ class TestDriveBackupHold(MainFlowCase):
         self.assertEqual(code, 1)
 
 
+class TestEmailArchive(MainFlowCase):
+
+    def test_backup_email_is_not_claimed_when_the_migration_backup_fails(self):
+        """OFF-17: "Email archive: covered" was recorded before the migration."""
+        gam = ScriptedGam()
+        code = self.run_main(gam, "--doit", "--force", "--user", LEAVER,
+                             "--backup-email", "--email-to", SUCCESSOR, "--no-drive",
+                             "--no-alias", "--no-calendar", "--no-forward", gyb_ok=False)
+        self.assertFalse(any("Email archive" in a for a in offb.summary_actions),
+                         offb.summary_actions)
+        self.assertEqual(code, 1)
+
+
 class TestLicenceHold(MainFlowCase):
 
     def test_transfer_failure_holds_licence_but_still_suspends(self):
