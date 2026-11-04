@@ -1815,7 +1815,12 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
         # A member whose Drive is off gets exit 60 and a header-only CSV,
         # the same shape as an empty drive; only stderr tells them apart.
         # Without this check the drive reads as scanned and clean.
-        skipped = any(m in err for m in PER_USER_SKIP_MARKERS)
+        # Only a line naming this member counts: "Does not exist" for a file
+        # deleted mid-scan is not the member lacking a Drive.
+        member = args[1].lower() if len(args) > 1 else ""
+        skipped = any(m.group(1).lower() == member
+                      for m in map(_NO_SERVICE_RE.search, err.splitlines())
+                      if m)
         if not skipped and (rc == 0 or (rc == 60 and is_header_only(out))):
             return True, out, ""
         return False, "", (err.strip().splitlines()[-1] if err.strip()

@@ -3734,6 +3734,17 @@ class TestSharedDriveScanAsMember(CtxTestCase):
         self.assertNotIn("org@example.com", [c[1] for c in self.calls])
         self.assertEqual("writer@example.com", self.calls[0][1])
 
+    def test_file_deleted_mid_scan_is_not_member_without_drive(self):
+        """AUD-39: "Does not exist" for a file ID is not the member."""
+        def fake(args):
+            if "id,name,mimeType,hasaugmentedpermissions" in args:
+                return 0, self.LISTING, ""
+            return 0, "id,name,permission.type\nF1,a.doc,anyone\n", (
+                "File: F2, Does not exist\n")
+        status, rows, _ = self.run_with(fake)
+        self.assertEqual(("ok", 1), (status, rows))
+        self.assertEqual({"org@example.com"}, {c[1] for c in self.calls})
+
     def test_organizer_first_no_grant(self):
         out = "id,name,permission.type\nF1,a.doc,anyone\n"
         status, rows, note = self.run_with(self.two_step(out))
