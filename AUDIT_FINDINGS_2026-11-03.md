@@ -219,6 +219,10 @@ No Critical finding. No path was found that suspends or deletes anyone other tha
 - Done (`783459e`): (a) trailing backslashes doubled for a spaced PowerShell path; not run on a Windows PowerShell 5.1 console (owed on the Windows VM). (b) mode and labels validated on load.
 - PLAUSIBLE for (a), CONFIRMED for (b). (a) 489-491 single-quotes paths; Windows PowerShell 5.1 and 7.0 to 7.2 re-quote `'C:\Backup Folder\'` as `"C:\Backup Folder\"` for a native executable and the C runtime reads `\"` as an escaped quote. The cmd branch doubles trailing backslashes for exactly this reason; the PowerShell branch does not. (b) Line 755 builds a selector from a stored `mode`; a tampered or corrupt localStorage value throws uncaught in the click handler. Validate `mode` and `labels` as `command_shell` already is.
 
+### Section A review (2026-11-04)
+- Independent read-only review of `546c224`..`41fcef0`: no High. Six findings, all held and fixed in `7d4d8f7`: a Ctrl+C during forwarding or auto-reply still exited 1 with licence removal and suspension recorded as failed (OFF-03); a Ctrl+C reaching the gam child mid alias delete could still destroy the alias, and a delete refused before it ran was reported as bouncing (OFF-01); the OFF-08 hold message on a run with no Drive transfer; a failed alias read at the interactive re-ask left exit 1 (OFF-05); the OFF-11 decoder was never flushed; a test path was relative on Python 3.8. Count 278 in `ddfa6fe`. Suites green on 3.15, 3.9 and 3.8.
+- A4: run_gam stdin closed (`71b36eb`); the other A4 items are open.
+
 ## A4. Improvements (not defects)
 
 - `run_gam` (1004) does not pass `stdin=subprocess.DEVNULL`, unlike `run_gyb`; `run_gam_parallel` runs up to six gam processes sharing the terminal's stdin, so any gam prompt would hang to the timeout.
