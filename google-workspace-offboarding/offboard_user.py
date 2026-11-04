@@ -5503,7 +5503,15 @@ def run_offboarding(args, plan: Dict[str, dict], user_email: str, dry_run: bool,
         else:
             summary_skip(f"{label} (declined)")
 
-    transfer("drive", "Drive transfer", transfer_drive)
+    if "Drive backup (rclone)" in transfer_failures:
+        # After `transfer drive` the leaver owns nothing, so a failed backup
+        # could never be re-run against them. Hold the move instead (OFF-08).
+        print_warning("Drive transfer HELD: the Drive backup failed, so the files "
+                      "stay with the leaver until a re-run completes the backup.")
+        summary_skip("Drive transfer (held: the Drive backup failed; re-run "
+                     "with --backup-drive, then the transfer runs)")
+    else:
+        transfer("drive", "Drive transfer", transfer_drive)
     _abort_if_shutdown(dry_run, "the Drive transfer")
 
     # Shared Drives are untouched by every phase above, so report them

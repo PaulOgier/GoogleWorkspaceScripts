@@ -486,6 +486,32 @@ class TestContainment(MainFlowCase):
         self.assertEqual(self.gyb_calls, [])
 
 
+class TestDriveBackupHold(MainFlowCase):
+
+    def test_failed_drive_backup_holds_the_drive_transfer(self):
+        """OFF-08: the transfer used to run anyway, leaving nothing at the
+        leaver for a re-run of the backup to fetch."""
+        gam = ScriptedGam()
+        transfers = []
+
+        def popen(cmd, **kw):
+            if "transfer" in cmd:
+                transfers.append(cmd)
+            return FakePopen("Got 1 Drive Files/Folders\n", 0)
+
+        with mock.patch.object(offb, "backup_drive_rclone",
+                               lambda *a, **k: offb.summary_error("Drive backup failed")):
+            code = self.run_main(gam, "--doit", "--force", "--user", LEAVER,
+                                 "--backup-drive", "--drive-to", SUCCESSOR, "--no-email",
+                                 "--no-alias", "--no-calendar", "--no-forward", popen=popen)
+        self.assertEqual(transfers, [])
+        self.assertTrue(any("Drive transfer (held" in k for k in offb.summary_skipped),
+                        offb.summary_skipped)
+        self.assertFalse(any("delete license" in a for a in gam.argv()))
+        self.assertIn(f"update user {LEAVER} suspended on", gam.argv())
+        self.assertEqual(code, 1)
+
+
 class TestLicenceHold(MainFlowCase):
 
     def test_transfer_failure_holds_licence_but_still_suspends(self):

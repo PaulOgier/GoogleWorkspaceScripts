@@ -284,7 +284,9 @@ this repository check a backup and find those messages.
 
 Drive ownership moves to the successor into an organised folder named for the
 leaver. With `--backup-drive`, rclone downloads the Drive first and a re-run
-syncs into the previous backup rather than fetching everything again. Google
+syncs into the previous backup rather than fetching everything again. If the
+backup fails, the Drive transfer is held so the files stay with the leaver
+for that re-run. Google
 Forms and Sites cannot be exported and are reported as an accepted gap. Files
 the leaver could access but did not own are skipped by GAM and reported with
 a count and a verify instruction, not as a failure.
