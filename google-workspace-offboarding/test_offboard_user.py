@@ -941,6 +941,25 @@ class TestSuspension(OffboardTestCase):
         self.assertFalse(offb.summary_errors)
         self.assertIn("after Ctrl+C", self.actions())
 
+    def test_ctrl_c_during_the_read_back_still_verifies(self):
+        """Final review: the read-back was refused after Ctrl+C, so a landed
+        suspension was reported as NOT verified."""
+        def update(_args, _kw):
+            return True, "Updated"
+        reads = []
+
+        def quick(_args, _kw):
+            # The flip lags: the first read is still ACTIVE and Ctrl+C lands
+            # during it; FakeGam then refuses every unbypassed read.
+            reads.append(1)
+            if len(reads) == 1:
+                offb.shutdown_requested = True
+                return True, ACTIVE_USER
+            return True, SUSPENDED_USER
+        with gam(FakeGam([(("update",), update), (("info", "user"), quick)])), clocked():
+            self.assertTrue(offb.suspend_user(U, dry_run=False))
+        self.assertFalse(offb.summary_errors)
+
     def test_dry_run_reports_without_a_read_back(self):
         fake = FakeGam()
         with gam(fake):

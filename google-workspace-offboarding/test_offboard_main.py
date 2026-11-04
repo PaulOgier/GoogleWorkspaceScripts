@@ -523,6 +523,19 @@ class TestLateInterrupt(MainFlowCase):
         self.assertTrue(any("NOT suspended" in w for w in offb.summary_warnings),
                         offb.summary_warnings)
 
+    def test_ctrl_c_at_licence_removal_on_a_suspended_leaver_claims_no_active_account(self):
+        """Final review: the leaver stayed suspended all run without --unsuspend."""
+        gam = ScriptedGam(suspended=True)
+
+        def interrupt_on_licence(args):
+            if args[:2] == ["user", LEAVER] and "license" in args:
+                offb.shutdown_requested = True
+        gam.on_call = interrupt_on_licence
+        code = self.run_main(gam, "--doit", "--force", "--no-transfer", "--user", LEAVER)
+        self.assertEqual(code, offb.EXIT_INTERRUPTED)
+        self.assertFalse(any("NOT suspended" in w for w in offb.summary_warnings),
+                         offb.summary_warnings)
+
     def test_ctrl_c_at_scorched_delete_exits_130(self):
         gam = ScriptedGam()
 
