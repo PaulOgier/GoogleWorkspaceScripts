@@ -2303,8 +2303,9 @@ class _PythonReader:
         if target is None:
             return None, False
         toks = self._argv(target, params)
-        if toks and (len(call.args) > 2 or any(k.arg in ('executable', 'preexec_fn', None) for k in call.keywords)):
-            # executable= (or Popen's third positional, or one hidden in **opts) runs that program with this argv,
+        if toks and (len(call.args) > 2 or any(isinstance(a, ast.Starred) for a in call.args) or
+                     any(k.arg in ('executable', 'preexec_fn', None) for k in call.keywords)):
+            # executable= (or Popen's third positional, or one hidden in *rest or **opts) runs that program with this argv,
             # so argv[0] naming gam proves nothing
             toks = [Dyn('{program chosen by executable=}')] + list(toks[1:])
         return toks, any(k.arg == 'shell' for k in call.keywords)

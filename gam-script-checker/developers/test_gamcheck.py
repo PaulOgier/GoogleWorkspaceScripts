@@ -742,6 +742,7 @@ AUDIT_2026_11 += [
     ('gam info domain\ngam print users; python3 -c "import subprocess; subprocess.run([\'gam\', \'print\', \'users\'], executable=\'/bin/sh\')"', 'shell', g.UNKNOWN, 'floor'),
     ('import subprocess\nsubprocess.run(["gam", "info", "domain"])\nsubprocess.run(["gam", "print", "users"], executable="/bin/rm")', 'python', g.UNKNOWN, 'floor'),
     ('import subprocess\nsubprocess.run(["gam", "info", "domain"])\nsubprocess.run(["gam", "print", "users"], **opts)', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess\nsubprocess.run(["gam", "info", "domain"])\nsubprocess.Popen(["gam", "print", "users"], *rest)', 'python', g.UNKNOWN, 'floor'),
     ('import subprocess\nsubprocess.run(["gam", "info", "domain"])\nsubprocess.Popen(["gam", "print", "users"], 0, "/usr/local/bin/x")', 'python', g.UNKNOWN, 'floor'),
     ('gam info domain\ngam print users; perl -e "system((\'gam\', \'print\', \'users\'), x => \'delete\')"', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\ngam print users; perl -e "system((\'gam\', \'print\', \'users\'), \'delete\')"', 'shell', g.UNKNOWN, 'floor'),
