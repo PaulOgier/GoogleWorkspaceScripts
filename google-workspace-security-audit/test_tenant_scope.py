@@ -4012,6 +4012,29 @@ class TestPrintStyle(unittest.TestCase):
         self.assertIn("print-color-adjust:exact", block)
 
 
+class TestOpenReportHeadless(unittest.TestCase):
+    def test_no_display_on_linux_does_not_launch_a_browser(self):
+        """AUD-26: a console browser would block the run until quit."""
+        from unittest import mock
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(ts.sys, "platform", "linux"), \
+                mock.patch.object(ts.os, "name", "posix"), \
+                mock.patch.object(ts.webbrowser, "open") as browser:
+            self.assertFalse(ts.open_report(Path("/tmp/r.html"),
+                                            make_args(no_open=False)))
+            browser.assert_not_called()
+        with mock.patch.dict(os.environ, dict(env, DISPLAY=":0"), clear=True), \
+                mock.patch.object(ts.sys, "platform", "linux"), \
+                mock.patch.object(ts.os, "name", "posix"), \
+                mock.patch.object(ts.webbrowser, "open",
+                                  return_value=True) as browser:
+            self.assertTrue(ts.open_report(Path("/tmp/r.html"),
+                                           make_args(no_open=False)))
+            browser.assert_called_once()
+
+
 class TestPerTenantAdmin(unittest.TestCase):
     """AUD-10: each tenants.json entry may name its own auditing admin."""
 

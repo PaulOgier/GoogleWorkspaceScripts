@@ -338,7 +338,7 @@ timestamped run directory, with the report opened at the end.
 | `--run-dir <dir>` | Resume an existing run. Completed modules are skipped. |
 | `--render-only` | Re-run the checks and rebuild the report from a `--run-dir` (required), with no GAM calls at all. |
 | `--dry-run` | Print every GAM command without executing it. The preflight still runs `gam version` and `gam info domain`; only `--render-only` makes no GAM call at all. |
-| `--no-open` | Don't open the report in a browser when the run finishes. |
+| `--no-open` | Don't open the report in a browser when the run finishes. On Linux with no display (`DISPLAY` and `WAYLAND_DISPLAY` unset, as over ssh) the report is never opened, so a console browser cannot hold the run. |
 | `--yes` | Skip the interactive tenant confirmation. The identity is still logged. |
 
 ### Worked examples

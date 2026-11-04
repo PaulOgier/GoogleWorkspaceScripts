@@ -6984,6 +6984,13 @@ def open_report(path: Path, args) -> bool:
     """
     if args.no_open:
         return False
+    if (os.name == "posix" and sys.platform != "darwin"
+            and not os.environ.get("DISPLAY")
+            and not os.environ.get("WAYLAND_DISPLAY")):
+        # No display (an ssh session, cron): webbrowser would pick a console
+        # browser such as lynx or w3m and wait until someone quits it.
+        print_info(f"No display; open the report by hand: {path}")
+        return False
     try:
         opened = webbrowser.open(path.resolve().as_uri())
     except Exception as exc:                       # headless box, no browser
