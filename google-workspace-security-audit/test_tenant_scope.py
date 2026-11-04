@@ -4073,6 +4073,21 @@ class TestRestrictionColumnsMissing(CtxTestCase):
         self.assertEqual(1, len(self.ctx.clean_checks))
 
 
+class TestGroupsNoOwner(CtxTestCase):
+    def test_owner_matched_case_insensitively_and_partial_judges_reached(self):
+        """AUD-29."""
+        self.write_csv("groups", """email,name
+Sales@example.com,Sales
+staff@example.com,Staff
+unreached@example.com,Unreached""")
+        self.write_csv("group_members", """group,email,role,type
+sales@example.com,boss@example.com,OWNER,USER
+staff@example.com,u@example.com,MEMBER,USER""", status="partial")
+        found = {f.fid: f for f in ts.check_group_members(self.ctx)}
+        self.assertEqual(["staff@example.com"],
+                         [r["Group"] for r in found["groups-no-owner"].evidence])
+
+
 class TestPerTenantAdmin(unittest.TestCase):
     """AUD-10: each tenants.json entry may name its own auditing admin."""
 

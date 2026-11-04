@@ -3778,12 +3778,16 @@ def check_group_members(ctx: RunContext) -> List[Finding]:
     users = {col(r, "primaryEmail").lower(): r for r in ctx.rows("users")}
     external, suspended_owner = [], []
     owners: Dict[str, int] = {}
+    reached: Set[str] = set()
     for row in ctx.rows("group_members"):
         group = col(row, "group")
         member = col(row, "email")
         role = col(row, "role").upper()
+        reached.add(group.lower())
         if role == "OWNER":
-            owners[group] = owners.get(group, 0) + 1
+            # Lowercased: groups.csv and group_members.csv need not agree
+            # on the case of an address.
+            owners[group.lower()] = owners.get(group.lower(), 0) + 1
             urow = users.get(member.lower())
             if urow is not None and truthy(col(urow, "suspended")):
                 suspended_owner.append({"Group": group, "Owner": member})
@@ -3806,9 +3810,15 @@ def check_group_members(ctx: RunContext) -> List[Finding]:
     if _module_usable(ctx, "groups"):
         # Classroom creates classroom_teachers@ itself and manages it
         # without an owner; flagging it is noise on every school tenant.
+        # A partial member list never reached some groups: judge only the
+        # ones it did, or every unreached group reads as ownerless.
+        partial = ctx.module_status("group_members") == "partial"
         ownerless = [{"Group": col(g, "email"), "Name": col(g, "name")}
                      for g in ctx.rows("groups")
-                     if col(g, "email") and not owners.get(col(g, "email"))
+                     if col(g, "email")
+                     and not owners.get(col(g, "email").lower())
+                     and not (partial
+                              and col(g, "email").lower() not in reached)
                      and not col(g, "email").lower().startswith(
                          CLASSROOM_TEACHERS_LOCAL + "@")]
     if ownerless:
