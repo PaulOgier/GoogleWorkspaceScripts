@@ -435,8 +435,9 @@ than discarded.
 Ctrl+C lets the module that is running finish (GAM runs in its own process
 group, so the interrupt reaches the script and not GAM), then stops. The
 report is still rendered over what was collected and the exit code is 130, so
-a scheduled run can tell "complete" from "stopped". A second Ctrl+C kills
-everything. A temporary organizer grant is recorded in `manifest.json` before
+a scheduled run can tell "complete" from "stopped". A second Ctrl+C (or a
+second SIGTERM) kills everything and also exits 130, with no report. A
+temporary organizer grant is recorded in `manifest.json` before
 its removal runs and cleared only once the removal succeeds, so after either
 kind of stop `qa_report.html` still names any grant left behind.
 

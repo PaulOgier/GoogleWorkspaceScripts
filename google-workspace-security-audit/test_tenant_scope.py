@@ -2521,6 +2521,22 @@ old@example.com,False,False,Never,True,True,,True,False,Business""")
         self.assertEqual(["a", "b", "c", "d"], [k for k, _ in seen])
         self.assertEqual(before, os.environ.get("GAMCFGDIR"))
 
+    def test_all_stopped_between_tenants_exits_130(self):
+        path = self.run_dir / "tenants.json"
+        path.write_text(json.dumps({"tenants": {
+            k: {"customer_id": k} for k in ("a", "b")}}), encoding="utf-8")
+        seen = []
+
+        def fake_run(args, tenant):
+            seen.append(tenant["key"])
+            ts.shutdown_requested = True    # Ctrl+C lands after tenant a
+            return 0
+        self.patch("run_tenant", fake_run)
+        self.patch("check_for_updates", lambda: None)
+        self.patch("shutdown_requested", False)
+        self.assertEqual(130, ts.main(["--all", "--tenants", str(path)]))
+        self.assertEqual(["a"], seen)
+
 
 class TestDohFallbackParsing(unittest.TestCase):
     def test_doh_fallback_shapes(self):
@@ -3699,6 +3715,23 @@ class TestParseArgsGuards(unittest.TestCase):
     def test_grant_with_tenants_may_take_admin_from_the_entry(self):
         args = ts.parse_args(["--all", "--grant-temp-access"])
         self.assertTrue(args.grant_temp_access)
+
+    def test_unknown_module_key_is_a_usage_error(self):
+        self.assertRejects(["--only", "users,nosuchmodule"])
+        self.assertRejects(["--skip", "nosuchmodule"])
+        self.assertEqual("users,groups",
+                         ts.parse_args(["--only", "users,groups"]).only)
+
+    def test_forced_exit_is_130(self):
+        """AUD-12: a second Ctrl+C or SIGTERM is a stopped run, not exit 2."""
+        original = ts.shutdown_requested
+        self.addCleanup(setattr, ts, "shutdown_requested", original)
+        ts.shutdown_requested = True
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(SystemExit) as stop:
+                ts.signal_handler(2, None)
+        self.assertEqual(130, stop.exception.code)
 
     def test_tenant_and_all_are_exclusive(self):
         self.assertRejects(["--tenant", "a", "--all"])

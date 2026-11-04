@@ -453,7 +453,8 @@ def signal_handler(_signum, _frame):
         with _live_procs_lock:
             for proc in list(_live_procs):
                 _kill_tree(proc)
-        sys.exit(2)
+        # 130, not 2: 2 means "complete but some modules could not run".
+        sys.exit(130)
     shutdown_requested = True
     print(f"\n{Colours.YELLOW}[WARN] Ctrl+C received. Finishing the current "
           f"module, then stopping. The run directory can be resumed with "
@@ -6861,6 +6862,11 @@ def parse_args(argv=None):
     if args.all and (args.run_dir or args.compare_with):
         parser.error("--run-dir and --compare-with name one tenant's runs; "
                      "use --tenant with them")
+    for key in (args.only or "").split(",") + (args.skip or "").split(","):
+        # Here, not only in selected_modules: that runs after a run
+        # directory exists, and under --all it would stop every tenant.
+        if key.strip() and key.strip() not in MODULE_BY_KEY:
+            parser.error(f"unknown module key: {key.strip()} (see --list)")
     args.tenant_entry = None
     return args
 
@@ -7080,6 +7086,9 @@ def main(argv=None):
         if EXIT_PRIORITY.index(code if code in EXIT_PRIORITY else 1) \
                 > EXIT_PRIORITY.index(worst):
             worst = code
+    if shutdown_requested:
+        # Ctrl+C between tenants (or before the first) stopped the batch.
+        worst = 130
     return worst
 
 
