@@ -5908,8 +5908,8 @@ def run_checks(ctx: RunContext) -> List[Finding]:
             # One missing or partly collected module makes it a coverage
             # gap, listed as such elsewhere, not a clean result.
             complete = bool(ctx.consulted) and all(
-                ctx.module_status(k) in ("ok", "empty")
-                for k, _ in ctx.consulted)
+                usable and ctx.module_status(k) in ("ok", "empty")
+                for k, usable in ctx.consulted)
             if not raised and complete:
                 modules = sorted({k for k, usable in ctx.consulted if usable})
                 ctx.clean_checks.append((CHECK_TITLES[check.__name__],
@@ -6551,6 +6551,9 @@ def delivery_gate(ctx: RunContext) -> Tuple[bool, List[str]]:
                        + ", ".join(broken))
     if ctx.check_errors:
         reasons.append("checks did not run: " + ", ".join(ctx.check_errors))
+    if not ctx.internal_domains:
+        reasons.append("no internal-domain list, so external sharing and "
+                       "forwarding were not judged")
     stale = ctx.manifest["meta"].get("temp_grant_cleanup_failed", [])
     if stale:
         reasons.append(

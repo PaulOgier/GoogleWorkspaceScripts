@@ -3586,6 +3586,16 @@ change_user_access,boss@example.com,2026-10-02T09:00:00Z,d5,Deck,can_view,x@part
         self.assertEqual(self.EXTERNAL_IDS, ids & self.EXTERNAL_IDS)
         self.assertIn("personal recovery email", self.risk)
 
+    def test_empty_list_with_domains_ok_still_holds_and_is_not_clean(self):
+        self.ctx.internal_domains = []
+        self.write_csv("domains", "domainName\nexample.com")
+        ids, clean = self.run_all()
+        self.assertNotIn(ts.CHECK_TITLES["check_sendas"],
+                         {t for t, _ in clean})
+        ok, reasons = ts.delivery_gate(self.ctx)
+        self.assertFalse(ok)
+        self.assertTrue(any("internal-domain" in r for r in reasons))
+
     def test_domains_is_delivery_critical(self):
         self.ctx.set_module("domains", "error", 0)
         ok, reasons = ts.delivery_gate(self.ctx)
