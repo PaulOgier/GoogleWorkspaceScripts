@@ -325,7 +325,7 @@ TENANTS_FILE_CANDIDATES = [
 # Modules behind the Critical checks: if one of these failed, the report may
 # be missing its most serious findings and must not go out unreviewed.
 DELIVERY_CRITICAL_MODULES = ("users", "forwards", "asps", "mydrive_external",
-                             "shareddrive_external")
+                             "shareddrive_external", "domains")
 # Google's documented default for each policy field the API leaves out when
 # it was never changed (policy_defaults.json says where it comes from).
 POLICY_DEFAULTS_FILE = SCRIPT_DIR / "policy_defaults.json"
@@ -1171,7 +1171,8 @@ def selected_modules(args) -> List[Dict]:
     chosen = []
     for mod in MODULES:
         if only:
-            if mod["key"] in only:
+            # Every external-sharing check needs the tenant's domain list.
+            if mod["key"] in only or mod["key"] in ("domains", "domainaliases"):
                 chosen.append(mod)
             continue
         if mod["key"] in skip:
@@ -2304,6 +2305,18 @@ def _module_usable(ctx: RunContext, key: str) -> bool:
     return usable
 
 
+def _internal(ctx: RunContext) -> set:
+    """The tenant's own domains, lowercased. Empty means the domains module
+    never produced a list, so no address can be judged outside the
+    organisation: every caller then treats nothing as external, and the
+    check is recorded as having read an unusable domains module so it is
+    never listed as checked and clean."""
+    internal = {d.lower() for d in ctx.internal_domains}
+    if not internal:
+        ctx.consulted.append(("domains", False))
+    return internal
+
+
 def _super_admins(ctx: RunContext) -> List[Dict[str, str]]:
     return [r for r in ctx.rows("users") if truthy(col(r, "isAdmin"))
             and not truthy(col(r, "suspended"))]
@@ -2386,7 +2399,7 @@ def check_external_file_shares(ctx: RunContext) -> List[Finding]:
     round-3 fixtures exposed the gap.
     """
     findings = []
-    internal = {d.lower() for d in ctx.internal_domains}
+    internal = _internal(ctx)
     named, domains = [], []
     audiences: Dict[str, List[Dict[str, str]]] = {}
     for key, where in (("mydrive_external", "My Drive"),
@@ -2403,7 +2416,7 @@ def check_external_file_shares(ctx: RunContext) -> List[Finding]:
                      "File ID": col(row, "id")}
             if ptype in ("user", "group"):
                 addr = col(row, "permission.emailAddress")
-                if addr and email_domain(addr) not in internal:
+                if internal and addr and email_domain(addr) not in internal:
                     entry["Shared with"] = addr
                     named.append(entry)
             elif ptype == "domain":
@@ -2416,7 +2429,7 @@ def check_external_file_shares(ctx: RunContext) -> List[Finding]:
                 if dom.endswith(".audience.googledomains.com"):
                     audiences.setdefault(dom.split(".", 1)[0], []).append(entry)
                     continue
-                if dom and dom not in internal:
+                if internal and dom and dom not in internal:
                     entry["Shared with"] = f"everyone at {dom}"
                     domains.append(entry)
     if domains:
@@ -2566,7 +2579,7 @@ def check_admin_asps(ctx: RunContext) -> List[Finding]:
 def check_external_forwarding(ctx: RunContext) -> List[Finding]:
     if not _module_usable(ctx, "forwards"):
         return []
-    internal = set(ctx.internal_domains)
+    internal = _internal(ctx)
     hits = []
     for row in ctx.rows("forwards"):
         # GAM7 emits User,forwardEnabled,forwardTo,disposition (verified on
@@ -2574,7 +2587,7 @@ def check_external_forwarding(ctx: RunContext) -> List[Finding]:
         if not truthy(col(row, "forwardEnabled", "forwardingEnabled", "enabled")):
             continue
         target = col(row, "forwardTo", "emailAddress", "forwardingAddress")
-        if target and email_domain(target) not in internal:
+        if internal and target and email_domain(target) not in internal:
             hits.append({"User": col(row, "User"),
                          "Forwards to": target})
     if not hits:
@@ -2616,7 +2629,7 @@ def check_orphaned_shared_drives(ctx: RunContext) -> List[Finding]:
 
 def check_shared_drive_external(ctx: RunContext) -> List[Finding]:
     findings = []
-    internal = set(ctx.internal_domains)
+    internal = _internal(ctx)
     if _module_usable(ctx, "shareddriveacls"):
         hits = []
         # From the Shared Drive scan's first pass; every file in the drive
@@ -2624,7 +2637,7 @@ def check_shared_drive_external(ctx: RunContext) -> List[Finding]:
         file_counts = {k: str(v) for k, v in ctx.manifest["meta"].get(
             "shared_drive_file_counts", {}).items()}
         for row in ctx.rows("shareddriveacls"):
-            if truthy(col(row, "permission.deleted")):
+            if not internal or truthy(col(row, "permission.deleted")):
                 continue
             addr = col(row, "permission.emailAddress", "emailAddress")
             # A whole outside domain can be a member too. The per-file scan
@@ -2757,13 +2770,13 @@ def check_group_exposure(ctx: RunContext) -> List[Finding]:
 def check_filter_forwarding(ctx: RunContext) -> List[Finding]:
     if not _module_usable(ctx, "filters"):
         return []
-    internal = set(ctx.internal_domains)
+    internal = _internal(ctx)
     hits = []
     for row in ctx.rows("filters"):
         # GAM writes the action verb into the cell ("forward user@x.com"),
         # so the address has to come off the end of the value.
         target = col(row, "forward").removeprefix("forward").strip()
-        if target and email_domain(target) not in internal:
+        if internal and target and email_domain(target) not in internal:
             hits.append({"User": col(row, "User", "user"),
                          "Filter forwards to": target})
     if not hits:
@@ -2816,7 +2829,7 @@ def suspicious_filter(row: Dict[str, str], internal: Iterable[str]
     sender = value("from")
     if (trash or markread) and re.fullmatch(r"[^\s@,|()]+@[^\s@,|()]+",
                                             sender) \
-            and email_domain(sender) not in internal:
+            and internal and email_domain(sender) not in internal:
         return f"hides mail from {sender}"
     label = value("label").lower()
     if label and (label in BEC_FOLDERS or label in ("rss", "..", ".")
@@ -2829,7 +2842,7 @@ def check_filter_bec(ctx: RunContext) -> List[Finding]:
     """Filters that hide mail the way a mailbox takeover does."""
     if not _module_usable(ctx, "filters"):
         return []
-    internal = {d.lower() for d in ctx.internal_domains}
+    internal = _internal(ctx)
     hits = []
     for row in ctx.rows("filters"):
         why = suspicious_filter(row, internal)
@@ -3205,7 +3218,7 @@ def check_at_risk_accounts(ctx: RunContext) -> List[Finding]:
     two or more independent risk factors."""
     if not _module_usable(ctx, "users"):
         return []
-    internal = {d.lower() for d in ctx.internal_domains}
+    internal = _internal(ctx)
     asp_users = set()
     if _module_usable(ctx, "asps"):
         asp_users = {col(r, "User").lower() for r in _asp_rows(ctx)}
@@ -3227,7 +3240,7 @@ def check_at_risk_accounts(ctx: RunContext) -> List[Finding]:
         # every account carried one factor and any company-wide app grant
         # pushed nearly the whole tenant over the line (37 of 47 on a live
         # tenant, 2026-10-01).
-        if recovery and email_domain(recovery) not in internal:
+        if internal and recovery and email_domain(recovery) not in internal:
             reasons.append("personal recovery email")
         if email in asp_users:
             reasons.append("app-specific passwords")
@@ -3371,14 +3384,14 @@ def check_risky_oauth(ctx: RunContext) -> List[Finding]:
 def check_admin_recovery(ctx: RunContext) -> List[Finding]:
     if not _module_usable(ctx, "users"):
         return []
-    internal = set(ctx.internal_domains)
+    internal = _internal(ctx)
     hits = []
     for row in _super_admins(ctx):
         recovery = col(row, "recoveryEmail")
         phone = col(row, "recoveryPhone")
         entry = {"Super admin": col(row, "primaryEmail"),
                  "Recovery email": "", "Recovery phone": ""}
-        if recovery and email_domain(recovery) not in internal:
+        if internal and recovery and email_domain(recovery) not in internal:
             entry["Recovery email"] = recovery
         if phone:
             # A phone number is always a personal channel and the SIM-swap
@@ -3490,13 +3503,13 @@ def check_sendas(ctx: RunContext) -> List[Finding]:
     still trying to complete."""
     if not _module_usable(ctx, "sendas"):
         return []
-    internal = set(ctx.internal_domains)
+    internal = _internal(ctx)
     hits = []
     for row in ctx.rows("sendas"):
         addr = col(row, "sendAsEmail")
         if truthy(col(row, "isPrimary")) or not addr:
             continue
-        if email_domain(addr) not in internal:
+        if internal and email_domain(addr) not in internal:
             hits.append({"User": col(row, "User"), "Sends as": addr,
                          "Verified": col(row, "verificationStatus") or "?",
                          "Reply-to": col(row, "replyToAddress")})
@@ -3520,12 +3533,12 @@ def check_forwarding_addresses(ctx: RunContext) -> List[Finding]:
     off, so it can be switched back on with one click and no confirmation."""
     if not _module_usable(ctx, "forwardingaddresses"):
         return []
-    internal = set(ctx.internal_domains)
+    internal = _internal(ctx)
     hits = [{"User": col(r, "User"),
              "Forwarding address": col(r, "forwardingEmail"),
              "Status": col(r, "verificationStatus") or "?"}
             for r in ctx.rows("forwardingaddresses")
-            if col(r, "forwardingEmail")
+            if internal and col(r, "forwardingEmail")
             and email_domain(col(r, "forwardingEmail")) not in internal]
     if not hits:
         return []
@@ -3548,7 +3561,7 @@ def check_group_members(ctx: RunContext) -> List[Finding]:
     them), groups with no owner, and owners who are suspended."""
     if not _module_usable(ctx, "group_members"):
         return []
-    internal = set(ctx.internal_domains)
+    internal = _internal(ctx)
     users = {col(r, "primaryEmail").lower(): r for r in ctx.rows("users")}
     external, suspended_owner = [], []
     owners: Dict[str, int] = {}
@@ -3561,7 +3574,7 @@ def check_group_members(ctx: RunContext) -> List[Finding]:
             urow = users.get(member.lower())
             if urow is not None and truthy(col(urow, "suspended")):
                 suspended_owner.append({"Group": group, "Owner": member})
-        if member and col(row, "type").upper() != "CUSTOMER" \
+        if internal and member and col(row, "type").upper() != "CUSTOMER" \
                 and email_domain(member) not in internal:
             external.append({"Group": group, "External member": member,
                              "Role": role.lower()})
@@ -4088,7 +4101,7 @@ def check_courses(ctx: RunContext) -> List[Finding]:
 def check_classroom_outsiders(ctx: RunContext) -> List[Finding]:
     """Teachers or students from outside the organisation on a class roster,
     or invited to one. Either can see the class's students and their work."""
-    internal = {d.lower() for d in ctx.internal_domains}
+    internal = _internal(ctx)
     if not internal:
         return []
     hits, unnamed = [], 0
@@ -5336,7 +5349,7 @@ def check_drive_sharing_log(ctx: RunContext) -> List[Finding]:
     scans are not."""
     if not _module_usable(ctx, "report_drive_sharing"):
         return []
-    internal = {d.lower() for d in ctx.internal_domains}
+    internal = _internal(ctx)
     public: Dict[str, Dict[str, str]] = {}
     outside: Dict[str, Dict[str, set]] = {}
     for row in ctx.rows("report_drive_sharing"):
@@ -5353,7 +5366,8 @@ def check_drive_sharing_log(ctx: RunContext) -> List[Finding]:
             if not target or col(row, "new_value") == "none":
                 continue
             # target_user is an address, or a bare domain for a domain share.
-            if email_domain(target) in internal or target in internal:
+            if not internal or email_domain(target) in internal \
+                    or target in internal:
                 continue
             entry = outside.setdefault(actor, {"files": set(),
                                                "people": set()})

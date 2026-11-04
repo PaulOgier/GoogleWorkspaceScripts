@@ -317,7 +317,7 @@ timestamped run directory, with the report opened at the end.
 | `--admin <email>` | The auditing admin. Verifies the service account's DWD scopes in the preflight, and is the account the Shared Drive scans run as. Without it those scans are skipped and per-user modules run unverified. |
 | `--list` | Print the module registry (key, title, tier) and exit. |
 | `--full` | Add the tier-4 modules: vacation responders, managed browsers, context-aware access, Gmail profile sizes and Drive file counts. |
-| `--only <keys>` | Comma-separated module keys; everything else is skipped. |
+| `--only <keys>` | Comma-separated module keys; everything else is skipped except `domains` and `domainaliases`, which always run because every external-sharing check needs the tenant's domain list. If the domain list cannot be read, no address is reported as external and the report is held for review. |
 | `--skip <keys>` | Comma-separated module keys to skip. |
 | `--skip-tier <n>` | Skip a whole tier, e.g. `--skip-tier 3` to leave out the heavy Drive scans. |
 | `--no-dns` | Skip the DNS checks. |

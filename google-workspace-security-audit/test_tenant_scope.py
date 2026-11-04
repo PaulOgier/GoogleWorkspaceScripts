@@ -1636,7 +1636,8 @@ class TestModuleSelection(unittest.TestCase):
     def test_only(self):
         keys = {m["key"] for m in
                 ts.selected_modules(make_args(only="users,groups"))}
-        self.assertEqual({"users", "groups"}, keys)
+        # The domain list comes along: without it every address is external.
+        self.assertEqual({"users", "groups", "domains", "domainaliases"}, keys)
 
     def test_skip_tier(self):
         keys = {m["key"] for m in
@@ -3480,6 +3481,71 @@ class TestPlainLogFile(unittest.TestCase):
         self.assertNotIn("\x1b[", logging_text)
         self.assertIn(" [ERROR] [CRITICAL] once", logging_text)
         self.assertEqual(1, logging_text.count("[ERROR]"))
+
+
+class TestEmptyInternalDomains(CtxTestCase):
+    """AUD-01: with no domain list, no address can be judged external."""
+
+    EXTERNAL_IDS = {"external-forwarding", "filter-external-forwarding",
+                    "filter-bec-patterns", "sendas-external",
+                    "forwarding-addresses-external",
+                    "groups-external-members-present", "sd-external-members",
+                    "external-user-shares", "external-domain-shares",
+                    "admin-personal-recovery", "drive-shared-outside-30d"}
+
+    def setUp(self):
+        super().setUp()
+        self.write_csv("users", f"""{USERS_HEADER}
+boss@example.com,False,False,2026-08-01T10:00:00Z,False,False,boss@gmail.com,True,False,Business""")
+        self.write_csv("forwards", """User,forwardEnabled,forwardTo,disposition
+boss@example.com,True,rival@gmail.com,archive""")
+        self.write_csv("filters", """User,id,from,subject,query,label,trash,archive,markread,forward
+boss@example.com,f1,,,,,,,,forward leak@gmail.com
+boss@example.com,f2,ceo@partner.example,,,,trash,,,""")
+        self.write_csv("sendas", """User,displayName,sendAsEmail,replyToAddress,isPrimary,isDefault,treatAsAlias,verificationStatus
+boss@example.com,,boss@gmail.com,,False,False,True,accepted""")
+        self.write_csv("forwardingaddresses", """User,forwardingEmail,verificationStatus
+boss@example.com,boss@gmail.com,accepted""")
+        self.write_csv("group_members", """group,type,role,status,email
+team@example.com,USER,OWNER,ACTIVE,boss@example.com
+team@example.com,USER,MEMBER,ACTIVE,outsider@gmail.com""")
+        self.write_csv("shareddriveacls", """id,name,permission.id,permission.type,permission.emailAddress,permission.role,permission.deleted
+sd1,Client Drive,p1,user,partner@other.example.net,writer,False
+sd1,Client Drive,p2,user,boss@example.com,organizer,False""")
+        self.write_csv("mydrive_external", f"""{TestDriveChecks.FILELIST_HEADER}
+boss@example.com,f1,Plans.docx,application/vnd.google-apps.document,boss@example.com,p1,user,writer,x@gmail.com,,
+boss@example.com,f2,Deck,application/vnd.google-apps.document,boss@example.com,p2,domain,reader,,partner.example,False""")
+        self.write_csv("report_drive_sharing", f"""{TestDriveSharingLog.HEADER}
+change_user_access,boss@example.com,2026-10-02T09:00:00Z,d5,Deck,can_view,x@partner.example,shared_externally""")
+
+    def run_all(self):
+        findings = ts.run_checks(self.ctx)
+        # At-risk scores other factors too; only the recovery one is external.
+        self.risk = " ".join(r["Risk factors"] for f in findings
+                             if f.fid == "at-risk-accounts" for r in f.evidence)
+        return set(self.finding_ids(findings)), self.ctx.clean_checks
+
+    def test_no_external_finding_and_not_clean(self):
+        self.ctx.internal_domains = []
+        ids, clean = self.run_all()
+        self.assertEqual(set(), ids & self.EXTERNAL_IDS)
+        self.assertNotIn("personal recovery email", self.risk)
+        self.assertEqual([], self.ctx.check_errors)
+        titles = {t for t, _ in clean}
+        for name in ("check_external_forwarding", "check_sendas",
+                     "check_forwarding_addresses", "check_admin_recovery"):
+            self.assertNotIn(ts.CHECK_TITLES[name], titles)
+
+    def test_control_with_domains_finds_every_one(self):
+        ids, _ = self.run_all()
+        self.assertEqual(self.EXTERNAL_IDS, ids & self.EXTERNAL_IDS)
+        self.assertIn("personal recovery email", self.risk)
+
+    def test_domains_is_delivery_critical(self):
+        self.ctx.set_module("domains", "error", 0)
+        ok, reasons = ts.delivery_gate(self.ctx)
+        self.assertFalse(ok)
+        self.assertTrue(any("domains" in r for r in reasons))
 
 
 if __name__ == "__main__":
