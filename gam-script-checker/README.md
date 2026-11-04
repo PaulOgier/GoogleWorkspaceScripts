@@ -219,7 +219,7 @@ A command written for GAMADV-XTD3 or legacy GAM that GAM7 no longer accepts is n
 | `.py` | `subprocess` and `os.system` calls, wrapper functions such as `def gam(*args)`, gam command strings and argument lists kept as data |
 | `.txt`, `.gam` | GAM batch files (`gam batch`, `gam tbatch`), including `execute` lines |
 
-`gam csv`, `gam loop`, `gam batch` and `gam tbatch` are followed into the command they repeat or the file they run. Python fed from a heredoc in a shell script (`python3 - <<'EOF'`) is read as Python.
+`gam csv`, `gam loop`, `gam batch` and `gam tbatch` are followed into the command they repeat or the file they run. Python fed from a heredoc in a shell script (`python3 - <<'EOF'`) is read as Python. A gam argument list (`["gam", "delete", ...]`, `system('gam', ...)`) in code the checker does not read itself, such as Perl, Node, a `-c` string or a heredoc read by `uv run`, is CANNOT TELL.
 
 A line that runs another script (`python3 audit.py`, `bash ./offboard.sh`, `pwsh -File x.ps1`, `./x.sh`) is followed into that script when it exists on this computer, so a one-line paste that starts a script gets the script's verdict. `~` and `$HOME` are expanded; a path built from any other variable, or a script that is not there, reads as CANNOT TELL.
 
