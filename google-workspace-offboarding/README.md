@@ -65,8 +65,8 @@ incident became a guard in the script rather than a note in a wiki.
 The phases run in this order, and the order is the point:
 
 1. **Pre-flight snapshot.** The user's profile, licences, aliases, groups,
-   delegates, forwarding, signature, Drive settings and devices are exported
-   to JSON before anything changes. This is the audit trail, and it is kept
+   delegates, forwarding and send-as addresses (which carry the signature)
+   are exported to JSON before anything changes. This is the audit trail, and it is kept
    even on a delete.
 2. **Kill switch.** Containment first: move to the Offboarding organisational
    unit, wipe recovery details, reset the password, sign out every session,
@@ -200,7 +200,7 @@ python3 offboard_user.py --doit --force --scorched-earth --user leaver@yourdomai
 |---|---|
 | `--doit` | Execute changes. Without it the run is a dry run. |
 | `--force` | Skip every interactive prompt. Every non-skipped transfer phase must then have a destination from a flag, or the run aborts before any change. Does not imply `--unsuspend`, `--allow-admin-account` or `--allow-orphaned-shared-drives`. |
-| `--user <email>` | The user to offboard. Prompted for if omitted and `--force` is not set. |
+| `--user <email>` | The user to offboard. Prompted for if omitted; required with `--force`. |
 | `--log-dir <dir>` | Where log files go. Default `logs/`. |
 
 **Transfer destinations**
@@ -260,7 +260,7 @@ If you would rather not hand-craft the command line, open
 [`offboarding_command_builder.html`](offboarding_command_builder.html) in any
 browser. It is a single self-contained HTML page (no server, no install, works
 offline) that turns every flag into a form field with inline help. Fill in the
-leaver, the successor, the domain and any phase toggles, and it renders the
+leaver, the successor and any phase toggles, and it renders the
 exact `python3 offboard_user.py ...` command to copy.
 
 ## Mailbox migration and backup with GYB

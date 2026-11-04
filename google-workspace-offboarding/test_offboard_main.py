@@ -768,7 +768,8 @@ class TestAdminGate(MainFlowCase):
     def test_admin_account_blocks_before_any_write(self):
         gam = ScriptedGam(admin=True)
         code = self.run_main(gam, "--doit", "--force", "--no-transfer", "--user", LEAVER)
-        self.assertEqual(code, 1)
+        # Was 1; every other preflight refusal exits 2 (OFF-25c).
+        self.assertEqual(code, 2)
         self.assertEqual(gam.writes(), [])
         self.assertTrue(any("administrator privileges" in e for e in offb.summary_errors))
 

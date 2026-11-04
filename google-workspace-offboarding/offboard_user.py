@@ -105,7 +105,7 @@ Example usage:
   python offboard_user.py --doit --force --user leaver@yourdomain.com \
       --all-transfer-to testoffboard.team@yourdomain.com \
       --drive-to testoffboard.manager@yourdomain.com                                  # Split: Drive -> manager, rest -> team
-  python offboard_user.py --doit --force --scorched-earth          # DELETE user
+  python offboard_user.py --doit --force --scorched-earth --user leaver@yourdomain.com  # DELETE user
   python offboard_user.py --help
 
 Transfer destination precedence (Drive, Email, Alias, Calendar, Forward):
@@ -4914,7 +4914,7 @@ def parse_args():
             "      --drive-to testoffboard.manager@yourdomain.com \\\n"
             "      --email-to testoffboard.ops@yourdomain.com --no-alias \\\n"
             "      --no-calendar --no-forward                                                       # Per-phase routing, no global default\n"
-            "  python offboard_user.py --doit --force --scorched-earth          # DELETE user\n"
+            "  python offboard_user.py --doit --force --scorched-earth --user leaver@yourdomain.com  # DELETE user\n"
             "\n"
             "Transfer destination precedence (Drive, Email, Alias, Calendar, Forward):\n"
             "  1. Phase-specific flag (--drive-to, --email-to, --alias-to,\n"
@@ -5189,6 +5189,10 @@ def parse_args():
 
     # --user names the log file, so a value the prompt would refuse (":", "*")
     # used to surface as a traceback from the log file open (OFF-24).
+    # README: --user is prompted for only without --force; a --force run
+    # with no stdin used to block on that prompt and exit 2 (OFF-25b).
+    if args.force and not args.user:
+        parser.error("--force needs --user: a non-interactive run cannot prompt for it.")
     if args.user and not re.match(EMAIL_PATTERN, args.user):
         parser.error(f"--user {args.user!r} is not an email address.")
 
@@ -5292,7 +5296,7 @@ def main():
     print_info(f"Interactive: {'No (--force)' if args.force else 'Yes'}")
     print_info(f"Offboarding OU: {OFFBOARDING_OU}")
 
-    # Non-blocking check against the remote VERSION file.
+    # Check against the remote VERSION file: synchronous, 3 s timeout, never fatal.
     check_for_updates()
 
     if args.scorched_earth:
@@ -5348,7 +5352,9 @@ def main():
     except AdminAccountSafetyError as e:
         print_error(str(e))
         summary_error(str(e))
-        sys.exit(finish_run(dry_run))
+        # A preflight refusal: nothing ran, so 2 like every other (OFF-25c).
+        finish_run(dry_run)
+        sys.exit(2)
 
     is_suspended = user_info.get('_is_suspended', 'False') == 'True'
     is_2sv_enrolled = user_info.get('2-step enrolled', 'false').lower() == 'true'

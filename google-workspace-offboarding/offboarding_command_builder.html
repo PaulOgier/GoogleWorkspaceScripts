@@ -203,7 +203,7 @@
   </div>
 
   <div class="banner">
-    <strong>Containment always runs (v5.2.0).</strong> In Execute mode there is no combination of options that skips it. Even <code>--backup-drive --no-transfer --no-suspend</code>, which reads like a precautionary backup, still moves the user to the offboarding OU, wipes their recovery email and phone, revokes app passwords and OAuth tokens, signs out every session, scrambles the password and hides them from the directory. That is deliberate — the tool exists so a leaver cannot take data with them mid-migration — but it is irreversible, so choose Execute mode on purpose. The plan the script prints before acting says the same thing.
+    <strong>Containment always runs (v5.2.0).</strong> In Execute mode no combination of options skips it, except restore-only (<code>--reuse-email-backup</code>), which runs the email restore and nothing else. Even <code>--backup-drive --no-transfer --no-suspend</code>, which reads like a precautionary backup, still moves the user to the offboarding OU, wipes their recovery email and phone, revokes app passwords and OAuth tokens, signs out every session, scrambles the password and hides them from the directory. That is deliberate — the tool exists so a leaver cannot take data with them mid-migration — but it is irreversible, so choose Execute mode on purpose. The plan the script prints before acting says the same thing.
   </div>
 
   <div class="banner">
@@ -396,7 +396,7 @@
     <div class="field" style="margin-top:10px;">
       <label class="field-label" for="reuse-email-backup">Reuse an existing mailbox backup <span class="hint">— <code>--reuse-email-backup</code></span></label>
       <input type="text" id="reuse-email-backup" placeholder="/path/to/offboarding_backups/mailboxes/user@domain_20260721" autocomplete="off">
-      <span class="field-hint">Restore-only mode: restores from a backup you already have and skips the download and every other phase. Use it to finish a restore that died part way. Re-running is safe — Gmail discards messages it already holds, so nothing is duplicated. Needs <code>--force</code>.</span>
+      <span class="field-hint">Restore-only mode: restores from a backup you already have and skips the download and every other phase. Use it to finish a restore that died part way. Re-running is safe — Gmail discards messages it already holds, so nothing is duplicated.</span>
     </div>
   </details>
 
@@ -612,9 +612,6 @@
       } else {
         if (!trimmed('email-to') && !trimmed('all-to')) {
           errors.push('--reuse-email-backup requires --email-to or --all-transfer-to.');
-        }
-        if (mode === 'exec' && !$('force').checked) {
-          errors.push('--reuse-email-backup needs --force in Execute mode because a restore-only run cannot answer interactive prompts.');
         }
         if (mode === 'dry') {
           notes.push('--reuse-email-backup will run a dry-run preview of restore-only mode.');

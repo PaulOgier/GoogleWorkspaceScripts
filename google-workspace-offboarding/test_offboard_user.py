@@ -2302,6 +2302,10 @@ class TestArgParsing(OffboardTestCase):
             self._parse(*argv)
         self.assertEqual(cm.exception.code, 2, " ".join(argv))
 
+    def test_force_without_user_is_a_usage_error(self):
+        """OFF-25b: it blocked on the --user prompt and exited 2 on EOF."""
+        self._usage_error("--doit", "--force", "--scorched-earth")
+
     def test_a_user_that_is_not_an_address_is_a_usage_error(self):
         """OFF-24: it reached the log file open and raised a traceback."""
         self._usage_error("--user", "a:b*c@x.com")
@@ -2343,7 +2347,7 @@ class TestArgParsing(OffboardTestCase):
                 self._usage_error("--doit", "--force", "--scorched-earth", *extra)
 
     def test_scorched_earth_skips_transfers_but_keeps_the_snapshot(self):
-        args = self._parse("--doit", "--force", "--scorched-earth")
+        args = self._parse("--doit", "--force", "--scorched-earth", "--user", U)
         self.assertFalse(args.no_snapshot)
         for flag in ("no_drive", "no_email", "no_alias", "no_calendar",
                      "no_forward", "no_delegates", "no_auto_reply"):
