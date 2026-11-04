@@ -526,7 +526,8 @@ which path ran.
   licence SKU for the same org unit; the highest `sortOrder` wins, per
   Google's Max reducer. Licence scoping is not modelled, so a setting
   that differs between two SKUs in one org unit shows only the
-  winner.
+  winner. A policy applied to a group is reported on its own row as
+  `group:<address>`, never merged into an org unit.
 
 ## How it compares to other Google Workspace audit tools
 

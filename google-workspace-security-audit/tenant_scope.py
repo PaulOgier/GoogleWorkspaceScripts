@@ -4331,6 +4331,10 @@ def _parse_policy_settings(ctx: RunContext) -> List[Dict]:
         value = setting.get("value") or {}
         query = data.get("policyQuery") or {}
         ou = str(query.get("orgUnitPath", ""))
+        # A group-targeted policy has groupEmail and no orgUnitPath; merged
+        # under "" it was Max-merged with every other group and shown as "/".
+        if not ou and query.get("groupEmail"):
+            ou = "group:" + str(query["groupEmail"])
         if stype.startswith("rule."):
             key = (stype, ou, json.dumps(value, sort_keys=True))
             if key not in seen:

@@ -1172,6 +1172,26 @@ class TestPolicyChecks(PolicyTestCase):
         self.assertEqual("/Offboarding",
                          by_id["2sv-enrolment-blocked"].evidence[0]["Org unit"])
 
+    def test_group_targeted_policies_stay_apart(self):
+        # AUD-04: a group policy carries groupEmail and no orgUnitPath.
+        def group(email, allow, order):
+            return json.dumps({"policyQuery": {"group": "groups/x",
+                                               "groupEmail": email,
+                                               "sortOrder": order},
+                               "setting": {"type": "settings/security."
+                                           "two_step_verification_enrollment",
+                                           "value": {"allowEnrollment": allow}}})
+        self.write_policies(
+            [("security.two_step_verification_enrollment", "/",
+              {"allowEnrollment": True}, 201.0)],
+            broken_rows=[group("contractors@example.com", False, 301.0),
+                         group("execs@example.com", True, 302.0)])
+        by_id = {f.fid: f for f in ts.check_2sv_policy(self.ctx)}
+        self.assertIn("2sv-enrolment-blocked", by_id)
+        self.assertEqual(["group:contractors@example.com"],
+                         [r["Org unit"] for r in
+                          by_id["2sv-enrolment-blocked"].evidence])
+
     def test_2sv_enrolment_allowed_only_map(self):
         self.write_policies([
             ("security.two_step_verification_enrollment", "/",
