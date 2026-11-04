@@ -282,8 +282,10 @@ can list (none active, or none with a Drive licence) needs the flag. It adds
 the auditing admin as organizer, scans, and removes the grant again. Without
 it, those drives are reported **UNSCANNED**.
 
-Backup verification codes never reach disk. The collector keeps only the
-per-user count.
+Backup verification codes are never saved to the run directory: the
+collector keeps only the per-user count. GAM's output passes through an
+anonymous temporary file (no name on disk, removed when the command ends),
+as every command's output does.
 
 It is safe to run against a production tenant. Nothing is changed, suspended,
 deleted or transferred.

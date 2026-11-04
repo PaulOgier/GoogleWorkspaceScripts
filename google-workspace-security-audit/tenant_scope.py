@@ -1642,7 +1642,10 @@ def collect_backupcodes_args(ctx: RunContext, mod: Dict) -> List[str]:
 
 
 def collect_backupcodes(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
-    """Backup codes come back as LIVE codes; only the count may touch disk.
+    """Backup codes come back as LIVE codes; only the count is saved.
+
+    run_gam still passes them through its anonymous TemporaryFile (no name,
+    gone when the command ends), as it does every command's stdout.
 
     Takes the user list and threading from user_scan_args but never its
     redirect: GAM writing this CSV itself would put live codes on disk.
