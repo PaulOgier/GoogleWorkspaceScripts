@@ -1062,7 +1062,11 @@ def _strip_comment(line, lang, quote=''):
 
 
 def _heredoc_start(line, lang):
-    """The match for a heredoc (<<WORD, <<-'WORD') or here-string (@' / @") that starts outside quotes, or None."""
+    """[(terminator, strip tabs), ...] for each heredoc (<<WORD, <<-'WORD') or here-string (@' / @") starting outside quotes, or None.
+
+    The delimiter is read from the original line and unquoted as bash does, so <<'EOF', <<"EOF",
+    <<\\EOF and <<E'OF' all end at a line reading EOF.
+    """
     if lang not in ('shell', 'powershell'):
         return None
     plain, quote, i = [], '', 0
@@ -1081,8 +1085,25 @@ def _heredoc_start(line, lang):
         i += 1
     plain = ''.join(plain)
     if lang == 'shell':
-        return re.search(r'<<(-?)\s*([\'"]?)([A-Za-z_][\w.-]*)\2', plain.replace('<<<', '   ').replace('<< ', '<<'))
-    return re.search(r'@([\'"])\s*$', plain)
+        docs = []
+        for m in re.finditer(r'<<(-?)', plain.replace('<<<', '   ')):
+            before = plain[:m.start()]
+            if before.count('((') > before.count('))'):
+                continue  # $((1<<2)) and for ((i<<1; ...)) are arithmetic, not heredocs
+            rest = line[m.end():].lstrip(' \t')
+            # shortcut: a delimiter must start with a letter, _ , a quote or \; bash takes any word, but a
+            # heredoc wrongly opened would swallow the rest of the file, and one missed only reads its body
+            w = re.match(r"""(?:'[^']*'|"(?:\\.|[^"\\])*"|\\.|[^\s;&|<>()'"\\`])+""", rest)
+            if not w or not re.match(r"""['"\\A-Za-z_]""", rest):
+                continue
+            word = re.sub(r"""'([^']*)'|"((?:\\.|[^"\\])*)"|\\(.)""",
+                          lambda q: q.group(1) if q.group(1) is not None else
+                          re.sub(r'\\(["\\$`])', r'\1', q.group(2)) if q.group(2) is not None else q.group(3), w.group(0))
+            if word:
+                docs.append((word, m.group(1) == '-'))
+        return docs or None  # cat <<A <<B reads body A, then body B
+    m = re.search(r'@([\'"])\s*$', plain)
+    return [(m.group(1) + '@', False)] if m else None
 
 
 def _logical_lines(text, lang):
@@ -1098,16 +1119,16 @@ def _logical_lines(text, lang):
     for n, raw in enumerate(text.splitlines(), 1):
         if heredoc:
             # a heredoc or here-string body: read line by line, and an apostrophe in it opens no quote
-            word, tabs = heredoc
+            word, tabs = heredoc[0]
             if (raw.lstrip('\t') if tabs else raw) == word or (lang == 'powershell' and raw.lstrip().startswith(word)):
-                heredoc = None
+                heredoc = heredoc[1:] or None
             raw, quote = _strip_comment(raw, lang)[0], ''
         else:
             carried = quote
             raw, quote = _strip_comment(raw, lang, quote)
-            m = None if carried else _heredoc_start(raw, lang)
-            if m:
-                heredoc, quote = ((m.group(3), m.group(1) == '-') if lang == 'shell' else (m.group(1) + '@', False)), ''
+            start_doc = None if carried else _heredoc_start(raw, lang)
+            if start_doc:
+                heredoc, quote = start_doc, ''
         stripped = raw.rstrip()
         if start is None:
             start = n
@@ -1417,6 +1438,7 @@ class Checker:
             text = data.decode('utf-16', errors='replace')
         else:
             text = data.decode('utf-8-sig', errors='replace')
+        text = text.replace('\0', '')  # bash drops NUL bytes from a script; the Python reader also uses NUL as a marker
         lang = lang or self.language(path, text)
         return self.check_text(text, str(path), lang, [path.resolve().parent, Path.cwd()], depth, argv)
 
@@ -1865,8 +1887,8 @@ class _PythonReader:
             elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 if len(targets) == 1 and isinstance(targets[0], ast.Name):
-                    scope = self.scopes.setdefault(self._assign_scope(node, targets[0].id), {})
-                    scope.setdefault(targets[0].id, []).append(node.value)
+                    for scope in self._assign_scopes(node, targets[0].id):
+                        self.scopes.setdefault(scope, {}).setdefault(targets[0].id, []).append(node.value)
                 elif len(targets) == 1 and isinstance(targets[0], ast.Subscript) and isinstance(targets[0].value, ast.Name):
                     # cmd[1] = 'delete' after cmd = [...]: a second value makes the name a runtime value
                     self.scopes.setdefault(self._enclosing(node), {}).setdefault(targets[0].value.id, []).append(node)
@@ -1897,7 +1919,8 @@ class _PythonReader:
                 names = [(a.asname or a.name).split('.')[0] for a in node.names if a.name != '*']
             for name in names:
                 # ast.Pass stands for "bound at runtime": nothing resolves it, so the name reads as a runtime value
-                self.scopes.setdefault(self._assign_scope(node, name), {}).setdefault(name, []).append(ast.Pass())
+                for scope in self._assign_scopes(node, name):
+                    self.scopes.setdefault(scope, {}).setdefault(name, []).append(ast.Pass())
         functions = [fn for fn in ast.walk(self.tree) if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))]
         for fn in functions:
             self.fn, self.local = fn, self.scopes.get(fn, {})
@@ -1925,15 +1948,30 @@ class _PythonReader:
         self.findings.extend(self._credentials())
         return self.findings
 
-    def _assign_scope(self, node, name):
-        """The scope an assignment to name lands in: module level when the function declares it global."""
+    def _assign_scopes(self, node, name):
+        """The scopes an assignment to name lands in: module level for global, and for nonlocal
+        every enclosing function, since which one binds the name is not tracked here (a value
+        in a scope that does not bind it only makes the name read as a runtime value there)."""
         fn = self._enclosing(node)
         kind = self.declared.get(fn, {}).get(name) if fn is not None else None
         if kind == 'global':
-            return None
+            return [None]
         if kind == 'nonlocal':
-            return self._enclosing(fn)  # shortcut: nonlocal is taken as one level up, not the nearest function assigning it
-        return fn
+            out, up = [], self._enclosing(fn)
+            while up is not None:
+                out.append(up)
+                up = self._enclosing(up)
+            return out or [None]
+        return [fn]
+
+    def _in_class_body(self, node):
+        """True when node sits directly in a class body (no function between them)."""
+        node = self.parent.get(node)
+        while node is not None and not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            if isinstance(node, ast.ClassDef):
+                return True
+            node = self.parent.get(node)
+        return False
 
     def _run_values(self, name):
         """Assignments a called name may hold: its own function's, else the enclosing functions', else module level.
@@ -1947,7 +1985,8 @@ class _PythonReader:
         # after ex = os.execlp reads as os.execlp, even with ex = print in between). A run function
         # anywhere is read, never silence; a class body is not a scope here, so it counts too.
         values = [v for v in self.local.get(name, []) if not isinstance(v, ast.Pass)]
-        if values:
+        # a class body is not a scope here, but its names are invisible to the function around it
+        if values and not any(self._in_class_body(v) for v in values):
             return values
         fn = self.fn
         while fn is not None and self.declared.get(fn, {}).get(name) != 'global':
@@ -2144,8 +2183,12 @@ class _PythonReader:
             path_at = shape[1] - 1  # exec*(path, ...), spawn*(mode, path, ...): the path is what runs, not argv[0]
             if toks and path_at >= 0:
                 path = self._string(call.args[path_at], params) if len(call.args) > path_at else None
-                toks = [Dyn(ast.unparse(call.args[path_at])) if path is None else
-                        Dyn(path.replace(PLACEHOLDER, '{...}')) if PLACEHOLDER in path else path] + toks[1:]
+                if path is not None and PLACEHOLDER in path:
+                    last = re.split(r'[/\\\\]', path)[-1]
+                    # /home/gam/{x} runs whatever x is: only a known last part named gam counts as gam
+                    path = Dyn(path.replace(PLACEHOLDER, '{...}')) if PLACEHOLDER not in last and \
+                        _gam_name(last, set(), set()) else Dyn('{program chosen at runtime}')
+                toks = [Dyn(ast.unparse(call.args[path_at])) if path is None else path] + toks[1:]
             return toks, False
         target = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg in ('args', 'command', 'cmd')), None)
         if target is None:
@@ -2519,7 +2562,7 @@ def main(argv=None):
         opts.scripts = ['-'] + [s for s in opts.scripts if s != '-']
     for s in opts.scripts:
         if s == '-':
-            text = read_paste()
+            text = read_paste().replace('\0', '')  # as in check_file: bash drops NUL bytes
             if not text.strip():
                 print('gamcheck: nothing was pasted', file=sys.stderr)
                 worst = max(worst, UNKNOWN)

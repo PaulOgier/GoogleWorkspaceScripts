@@ -641,6 +641,17 @@ AUDIT_2026_11 += [
     ('gam info domain\necho "<<EOF"\nx=\'a # b\'; gam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
     ('gam info domain\nmsg="start\nsee <<EOF\nx=\'a # b\'"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\nif true; then\n  alias zap="gam delete"\nfi\nzap user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
+    # the heredoc delimiter is unquoted as bash does, so each form ends at its EOF line
+    ('gam info domain\ncat <<\\EOF\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\ncat <<E\'OF\'\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\ncat <<"E"OF\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\ncat <<\'EOF\'\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\ncat <<"EOF"\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nx=$((a<<b))\ny="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nx=$((1<<2)); cat <<EOF\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nfor ((i=0;i<<1;i++)); do cat <<EOF\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\nx=`cat <<EOF`\nbody\nEOF\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\ncat <<A <<B\nit\'s\nA\nbody\nB\nx="a\nb # c"; gam delete user bob@example.com', 'shell', g.UNKNOWN, 'floor'),
     # Python run functions reached by another name, and every os.exec/spawn form
     ('import subprocess, os, functools, asyncio\nsubprocess.run(["gam", "info", "domain"])\nrun = subprocess.run\nrun(["gam", "delete", "user", "b@example.com"])', 'python', g.DESTRUCTIVE, 'floor'),
     ('import subprocess, os, functools, asyncio\nsubprocess.run(["gam", "info", "domain"])\nrun = functools.partial(subprocess.run, check=True)\nrun(["gam", "delete", "user", "b@example.com"])',
@@ -701,6 +712,10 @@ AUDIT_2026_11 += [
     ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nrun = functools.partial(os.execlp, "gam", "gam", "delete")\ndef f(run):\n    run("user", sys.argv[1])\nf(run)', 'python', g.UNKNOWN, 'floor'),
     ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nex = os.execlp\ndef f():\n    [1 for ex in []]\n    ex("gam", "gam", "delete", "user", sys.argv[1])\nf()', 'python', g.DESTRUCTIVE, 'floor'),
     ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nverb = "info"\ndef f(cmd):\n    match cmd:\n        case str(verb):\n            subprocess.run(["gam", verb, "user", sys.argv[1]])\nf("delete")', 'python', g.UNKNOWN, 'floor'),
+    # a class body's names do not hide the module's; nonlocal reaches every enclosing function; /home/gam/<x> is not gam
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nGAM = "gam"\nrun = subprocess.run\ndef outer():\n    class C:\n        run = print\n    run([GAM, "delete", "user", "x@example.com"])\nouter()', 'python', g.DESTRUCTIVE, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\ndef a():\n    verb = "info"\n    def b():\n        def c():\n            nonlocal verb\n            verb = "delete"\n        c()\n    b()\n    subprocess.run(["gam", verb, "user", "x@example.com"])\na()', 'python', g.UNKNOWN, 'floor'),
+    ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nos.execv(f"/home/gam/{sys.argv[1]}", ["x", "print", "users"])', 'python', g.UNKNOWN, 'floor'),
     # a name not assigned in its own function counts every assignment around it: a run function anywhere is read
     ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nGAM = "gam"\nrun = subprocess.run\ndef outer():\n    class C:\n        run = print\n    def inner():\n        run([GAM, "delete", "user", "x@example.com"])\n    inner()\nouter()', 'python', g.DESTRUCTIVE, 'floor'),
     ('import subprocess, os, sys, functools\nsubprocess.run(["gam", "info", "domain"])\nGAM = "gam"\nrun = subprocess.run\ndef outer():\n    run = print\n    def inner(run):\n        run([GAM, "delete", "user", "x@example.com"])\n    return inner\nouter()(run)', 'python', g.DESTRUCTIVE, 'floor'),
@@ -730,6 +745,11 @@ def test_audit_2026_11(checker):
         got = g.verdict(checker.check_text('bash nul.sh\n', '<t>', 'shell', [Path(d)]))
         if got != g.DESTRUCTIVE:
             failures.append(f'bash nul.sh: got {g.LEVEL_NAMES[got]}')
+        # bash drops NUL bytes, so gam de<NUL>lete runs gam delete
+        (Path(d) / 'nulword.sh').write_bytes(b'gam info domain\ngam de\0lete user bob@example.com\n')
+        got = g.verdict(checker.check_file(Path(d) / 'nulword.sh'))
+        if got != g.DESTRUCTIVE:
+            failures.append(f'nulword.sh: got {g.LEVEL_NAMES[got]}')
         for text, want in (('bash late.sh check', g.DESTRUCTIVE), ('xargs bash rb.sh < modes.txt', g.DESTRUCTIVE),
                            ('bash rb.sh check', g.READ)):
             got = g.verdict(checker.check_text(f'gam info domain\n{text}\n', '<t>', 'shell', [Path(d)]))
