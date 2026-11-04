@@ -2438,6 +2438,22 @@ def _module_usable(ctx: RunContext, key: str) -> bool:
     return usable
 
 
+def _columns_missing(ctx: RunContext, key: str, *names: str) -> bool:
+    """True when the module has rows but none of these columns.
+
+    A GAM field change that drops a column would otherwise read as "nothing
+    open" and land the check on the clean list; recorded like an unusable
+    module so it never does."""
+    rows = ctx.rows(key)
+    if not rows:
+        return False
+    present = {k.lower().strip() for k in rows[0] if k}
+    if any(n.lower() in present for n in names):
+        return False
+    ctx.consulted.append((key, False))
+    return True
+
+
 def _internal(ctx: RunContext) -> set:
     """The tenant's own domains, lowercased. Empty means the domains module
     never produced a list, so no address can be judged outside the
@@ -2849,7 +2865,8 @@ def check_shared_drive_external(ctx: RunContext) -> List[Finding]:
                 "the drive holds nothing beyond their remit; if not, remove "
                 "them.",
                 hits, "shareddriveacls.csv"))
-    if _module_usable(ctx, "shareddrives"):
+    if _module_usable(ctx, "shareddrives") and not _columns_missing(
+            ctx, "shareddrives", "restrictions.domainUsersOnly"):
         open_drives = []
         for row in ctx.rows("shareddrives"):
             domain_only = col(row, "restrictions.domainUsersOnly")
@@ -3971,7 +3988,9 @@ def check_root_ou_users(ctx: RunContext) -> List[Finding]:
 def check_shared_drive_download_controls(ctx: RunContext) -> List[Finding]:
     """Per-drive copy and download controls left open. The tenant default
     is in sd-controls-open; this is what each drive actually has."""
-    if not _module_usable(ctx, "shareddrives"):
+    if not _module_usable(ctx, "shareddrives") or _columns_missing(
+            ctx, "shareddrives", "restrictions.copyRequiresWriterPermission",
+            "restrictions.downloadRestriction.restrictedForReaders"):
         return []
     hits = []
     for row in ctx.rows("shareddrives"):

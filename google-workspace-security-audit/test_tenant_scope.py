@@ -4051,6 +4051,28 @@ class TestOpenReportHeadless(unittest.TestCase):
             browser.assert_called_once()
 
 
+class TestRestrictionColumnsMissing(CtxTestCase):
+    def test_missing_restriction_columns_are_not_clean(self):
+        """AUD-28: a GAM field change must not turn into a silent clean."""
+        self.write_csv("shareddrives", "id,name\nd1,Finance")
+        original = ts.CHECKS
+        ts.CHECKS = [ts.check_shared_drive_download_controls]
+        try:
+            self.assertEqual([], ts.run_checks(self.ctx))
+        finally:
+            ts.CHECKS = original
+        self.assertEqual([], self.ctx.clean_checks)
+        # Control: with the columns present and closed, it is clean.
+        self.write_csv("shareddrives", "id,name,restrictions.copyRequiresWriterPermission\nd1,Finance,True")
+        self.ctx._rows_cache.clear()
+        ts.CHECKS = [ts.check_shared_drive_download_controls]
+        try:
+            ts.run_checks(self.ctx)
+        finally:
+            ts.CHECKS = original
+        self.assertEqual(1, len(self.ctx.clean_checks))
+
+
 class TestPerTenantAdmin(unittest.TestCase):
     """AUD-10: each tenants.json entry may name its own auditing admin."""
 
