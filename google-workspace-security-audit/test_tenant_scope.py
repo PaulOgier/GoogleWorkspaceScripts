@@ -1656,6 +1656,22 @@ f@example.com,Google-Apps-Unlimited,G Suite Business""")
         self.assertNotIn(ts.CHECK_TITLES["check_licence_waste"],
                          {t for t, _ in self.ctx.clean_checks})
 
+    def test_legacy_business_line_does_not_cover_business_standard(self):
+        """Review 2 of AUD-03: "business" is inside "business standard"."""
+        self.write_domaininfo("G Suite Business Licenses: 5\n")
+        self.write_csv("licenses", "userId,skuId,skuDisplay\n" + "\n".join(
+            f"u{i}@example.com,1010020028,Google Workspace Business Standard"
+            for i in range(20)))
+        ts.run_checks(self.ctx)
+        self.assertNotIn(ts.CHECK_TITLES["check_licence_waste"],
+                         {t for t, _ in self.ctx.clean_checks})
+
+    def test_seat_count_with_thousands_comma(self):
+        """GAM prints counts as f'{value:,}'."""
+        owned = ts.parse_owned_licences(
+            "Workspace Enterprise Plus Licenses: 1,200\n")
+        self.assertEqual({"Workspace Enterprise Plus": 1200}, owned)
+
     def test_no_domaininfo_no_finding(self):
         self.write_csv("licenses", """userId,skuId,skuDisplay
 a@example.com,1010020020,Google Workspace Enterprise Plus""")
@@ -3763,7 +3779,19 @@ class TestTempGrantCleanupInterrupted(CtxTestCase):
             lambda args: (0, organizer, "") if args[4] == "D1" else
             (56, "", "Permission ID: x, Does not exist\n"))
         self.assertIn("D1", [c[4] for c in calls if "delete" in c])
-        self.assertNotIn("D1", [c[4] for c in calls if "info" in c])
+        self.assertNotIn("D1", [c[4] for c in calls if "add" in c])
+        self.assertEqual([], self.on_disk())
+
+    def test_leftover_grant_removed_by_hand_is_granted_again(self):
+        """Review 2: a leftover grant already gone is added, then removed."""
+        self.ctx.manifest["meta"]["temp_grant_cleanup_failed"] = [
+            {"drive": "Finance", "id": "D1", "admin": "admin@example.com"}]
+        self.ctx.save()
+        calls, _ = self.run_recording(
+            lambda args: (56, "", "Permission ID: x, Does not exist\n"))
+        self.assertEqual(["add", "delete"],
+                         [c[2] for c in calls if c[4] == "D1"
+                          and c[2] in ("add", "delete")])
         self.assertEqual([], self.on_disk())
 
     def test_failed_membership_check_never_grants(self):
@@ -3889,6 +3917,17 @@ class TestSharedDriveScanAsMember(CtxTestCase):
                 return 0, self.LISTING, ""
             return 0, "id,name,permission.type\nF1,a.doc,anyone\n", (
                 "User: org@example.com, Drive File/Folder: F2, Does not exist\n")
+        status, rows, _ = self.run_with(fake)
+        self.assertEqual(("ok", 1), (status, rows))
+        self.assertEqual({"org@example.com"}, {c[1] for c in self.calls})
+
+    def test_shared_drive_line_naming_the_member_is_not_no_drive(self):
+        """Review 2 of AUD-39: a drive-level line is not the member."""
+        def fake(args):
+            if "id,name,mimeType,hasaugmentedpermissions" in args:
+                return 0, self.LISTING, ""
+            return 0, "id,name,permission.type\nF1,a.doc,anyone\n", (
+                "User: org@example.com, Shared Drive ID: D1, Does not exist\n")
         status, rows, _ = self.run_with(fake)
         self.assertEqual(("ok", 1), (status, rows))
         self.assertEqual({"org@example.com"}, {c[1] for c in self.calls})

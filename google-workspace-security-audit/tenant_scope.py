@@ -1843,10 +1843,13 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
         # Without this check the drive reads as scanned and clean.
         # Only a line naming this member counts: "Does not exist" for a file
         # deleted mid-scan is not the member lacking a Drive.
-        member = args[1].lower() if len(args) > 1 else ""
-        skipped = any(m.group(1).lower() == member and "File" not in ln
-                      for ln in err.splitlines()
-                      for m in [_NO_SERVICE_RE.search(ln)] if m)
+        # The message must follow the user directly: "User: m, Shared Drive
+        # ID: D1, Does not exist" or a File/Folder line is about an item.
+        member = args[1] if len(args) > 1 else ""
+        no_drive = re.compile(
+            r"User: " + re.escape(member) + r", (?:\w+ )?(?:Service/App not "
+            r"enabled|Service not applicable|Does not exist)", re.IGNORECASE)
+        skipped = any(no_drive.search(ln) for ln in err.splitlines())
         if not skipped and (rc == 0 or (rc == 60 and is_header_only(out))):
             return True, out, ""
         return False, "", (err.strip().splitlines()[-1] if err.strip()
@@ -1962,17 +1965,18 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
         if not ctx.args.grant_temp_access:
             unscanned.append(f"{drive_name} ({drive_id})")
             continue
-        # A drive whose earlier grant could not be removed holds our own
-        # permission: re-grant and remove it, never read it as membership.
+        # A drive whose earlier grant could not be removed may still hold our
+        # own permission: remove it, never read it as membership. It is added
+        # again only if it is gone (removed by hand since).
         ours = any(e.get("id") == drive_id for e in ctx.manifest["meta"].get(
             "temp_grant_cleanup_failed", []))
-        member = None if ours else admin_is_member(drive_id)
-        if not ours and member is None:
+        member = admin_is_member(drive_id)
+        if member is None:
             unscanned.append(f"{drive_name} ({drive_id}) - could not check "
                              "the admin's membership before granting")
             grant_errors.append("membership check failed")
             continue
-        if member:
+        if member and not ours:
             # Added since shareddriveacls.csv was collected (a resume): the
             # grant's removal would delete the admin's real membership.
             ok, _ = scan(drive_id, drive_name, ctx.admin)
@@ -1981,7 +1985,7 @@ def collect_sd_external(ctx: RunContext, mod: Dict) -> Tuple[str, int, str]:
                 failed.append(f"{drive_name} ({drive_id})")
                 unscanned.append(f"{drive_name} ({drive_id}) - scan failed")
             continue
-        rc, out, err = run_gam(
+        rc, out, err = (0, "", "") if member else run_gam(
             ["user", ctx.admin, "add", "drivefileacl", drive_id,
              "user", ctx.admin, "role", "organizer", "adminaccess"],
             timeout=120, dry_run=ctx.args.dry_run)
@@ -5974,10 +5978,11 @@ def parse_owned_licences(text: str) -> Dict[str, int]:
     rather than wrong data."""
     owned = {}
     for line in text.splitlines():
-        match = re.match(r"\s*(.{3,}?)\s+Licenses:\s*(\d+)\s*$", line,
+        # GAM 7.50.00 prints the count as f'{value:,}', so 1,000 has a comma.
+        match = re.match(r"\s*(.{3,}?)\s+Licenses:\s*(\d[\d,]*)\s*$", line,
                          re.IGNORECASE)
         if match:
-            owned[match.group(1).strip()] = int(match.group(2))
+            owned[match.group(1).strip()] = int(match.group(2).replace(",", ""))
     return owned
 
 
@@ -6000,8 +6005,9 @@ def check_licence_waste(ctx: RunContext) -> List[Finding]:
     # check must not read as checked and clean.
     counted = {_norm_sku(name) for name in owned}
     for sku in assigned:
-        if sku and "cloud identity" not in sku and not any(
-                c and (c == sku or c in sku or sku in c) for c in counted):
+        # Exact names only: "business" (G Suite Business) is a substring of
+        # Business Starter, Standard and Plus, which have no seat line.
+        if sku and "cloud identity" not in sku and sku not in counted:
             ctx.consulted.append(("domaininfo", False))
             break
     hits = []
