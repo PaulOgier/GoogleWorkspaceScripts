@@ -482,6 +482,7 @@ import atexit
 import contextlib
 import csv
 import io
+import codecs
 import subprocess
 import sys
 import os
@@ -1078,7 +1079,9 @@ def _stream_process(cmd: List[str], on_line, env: Optional[dict] = None) -> int:
     GYB (tqdm) and rclone (-P) redraw progress with a bare carriage return,
     so a plain line iterator would show nothing until the phase ends. Reads
     in small chunks and treats both \\r and \\n as separators. Blank lines are
-    dropped. On Ctrl+C the child is terminated and the exit code returned is
+    dropped. The pipe is read as bytes with read1(), which returns whatever
+    has arrived; a text read(256) waited for 256 characters, so short lines
+    reached the log seconds late (OFF-11). On Ctrl+C the child is terminated and the exit code returned is
     whatever it died with. stdin is closed so the child can never hang on a
     prompt; no timeout, because a real backup can legitimately run for hours.
     """
@@ -1087,21 +1090,19 @@ def _stream_process(cmd: List[str], on_line, env: Optional[dict] = None) -> int:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
-        text=True,
-        encoding="utf-8", errors="replace",
-        bufsize=1,
         env=env,
     )
     assert proc.stdout is not None
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     buffer = ""
     while True:
         if shutdown_requested:
             proc.terminate()
             break
-        chunk = proc.stdout.read(256)
+        chunk = proc.stdout.read1(4096)
         if not chunk:
             break
-        buffer += chunk
+        buffer += decoder.decode(chunk)
         while True:
             idx = -1
             for sep in ("\r", "\n"):

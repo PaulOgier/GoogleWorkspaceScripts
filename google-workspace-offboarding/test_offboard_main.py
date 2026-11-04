@@ -170,7 +170,7 @@ class FakePopen:
     """What _stream_process needs from a child: stdout.read(n), wait, returncode."""
 
     def __init__(self, text="", returncode=0):
-        self.stdout = io.StringIO(text)
+        self.stdout = io.BytesIO(text.encode("utf-8"))
         self.returncode = returncode
 
     def wait(self):

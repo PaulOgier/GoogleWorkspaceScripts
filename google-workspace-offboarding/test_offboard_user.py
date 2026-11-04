@@ -26,6 +26,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -152,11 +153,11 @@ def restored_db(backup: Path, destination: str, count: int):
 def fake_popen(text: str, returncode: int):
     """Patch subprocess.Popen with a child whose merged output is `text`.
 
-    _stream_process reads stdout in 256-byte chunks, so the fake's stdout is
-    a StringIO rather than a line iterator.
+    _stream_process reads stdout as bytes with read1(), so the fake's stdout
+    is a BytesIO rather than a line iterator.
     """
     proc = mock.MagicMock()
-    proc.stdout = io.StringIO(text)
+    proc.stdout = io.BytesIO(text.encode("utf-8"))
     proc.returncode = returncode
     return mock.patch.object(offb.subprocess, "Popen", return_value=proc)
 
@@ -1238,6 +1239,21 @@ class TestDeleteUser(OffboardTestCase):
             offb.delete_user(U, dry_run=False)
         self.assertFalse(offb.summary_errors)
         self.assertTrue(any("cancelled" in w for w in offb.summary_warnings))
+
+
+class TestStreamProcess(OffboardTestCase):
+
+    def test_a_short_line_arrives_before_the_child_exits(self):
+        """OFF-11: read(256) held a short line until 256 characters or EOF."""
+        child = ("import sys, time; sys.stdout.write('é ready\\n'); "
+                 "sys.stdout.flush(); time.sleep(3)")
+        seen = []
+        start = time.monotonic()
+        with real_subprocess():
+            offb._stream_process([sys.executable, "-c", child],
+                                 lambda line: seen.append((line, time.monotonic() - start)))
+        self.assertEqual([line for line, _ in seen], ["é ready"])
+        self.assertLess(seen[0][1], 2.0, seen)
 
 
 class TestLogFile(OffboardTestCase):
