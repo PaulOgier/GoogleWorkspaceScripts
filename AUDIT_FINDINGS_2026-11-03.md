@@ -685,6 +685,12 @@ Severity convention for this tool: an under-warning (READ-ONLY or CHANGES printe
 - README claims checked true: the four-line "Try it first" paste, the `offboard.sh` fixture verdict, worst-verdict exit code across files, `--quiet`, `gam csv`/`loop`/`batch`/`tbatch` followed, the tenant NOTE condition.
 
 
+### VM phase (2026-11-04)
+- Review rounds found five under-warnings around Python heredocs, all fixed with tests controlled against the previous commit: python behind a prefix word's options or a path, a heredoc on a continuation line, a heredoc opener on a line ending in `\` (bash starts the body after the joined line), python chosen by `$(...)` or backticks, and a heredoc on a line closing a quote from the line before (`1d9d747`, `8d75a5d`, `94dc2c0`).
+- CHK-01 live on Linux GNU readline: Ctrl+D within a second of the paste's blank line hung paste mode, since Linux drops a line-mode EOF once readline switches line mode off; the wait now runs with line editing off (`06901cf`). A one-shot paste with a blank line, with and without that Ctrl+D, and the same paste into cmd on Windows (ConPTY over ssh): DESTRUCTIVE, tail checked, nothing run by the shell.
+- Linux 3.14.4, macOS 3.9.6 and 3.14.7, Windows 3.14.5 on the `94dc2c0` zip: suite, blind set 0 under-warned, 345 corpus pastes 0 under-warned, terminal paste 16/16.
+- Left as is: a paste that stalls over a second after its blank line (README states it); a sudo user named `python3`; over-warnings on `find -exec gam`, `parallel gam` and two-level Python wrappers.
+
 ---
 
 # D. GAM7 Update (`gam7-update/gam-update.sh`, `test-gam-update.sh`)
