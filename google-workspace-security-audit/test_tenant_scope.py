@@ -2478,6 +2478,28 @@ old@example.com,False,False,Never,True,True,,True,False,Business""")
         self.assertTrue(a["enabled"])
         self.assertFalse(a["gamcfgdir"].startswith("~"))
 
+    def test_load_tenants_rejects_wrong_shapes(self):
+        """AUD-11: each of these used to load and misbehave, or crash."""
+        path = self.run_dir / "tenants.json"
+        for text in ('[]', '{"tenants": []}', '{"tenants": {"a": "C01"}}',
+                     '{"tenants": {"a": {"customer_id": 123}}}',
+                     '{"tenants": {"a": {"customer_id": "C01", '
+                     '"break_glass": "bg@example.com"}}}',
+                     '{"tenants": {"a": {"customer_id": "C01", '
+                     '"break_glass": [1]}}}',
+                     '{"tenants": {"a": {"customer_id": "C01", '
+                     '"enabled": "false"}}}',
+                     '{"tenants": {"a": {"customer_id": "C01", '
+                     '"gamcfgdir": 5}}}',
+                     '{"tenants": {"a": {"customer_id": "C01", '
+                     '"admin": ["x@example.com"]}}}',
+                     '{"tenants": {"a/../b": {"customer_id": "C01"}}}',
+                     '{"tenants": {"..": {"customer_id": "C01"}}}'):
+            with self.subTest(text=text):
+                path.write_text(text, encoding="utf-8")
+                with self.assertRaises(ts.ConfigError):
+                    ts.load_tenants(path)
+
     def test_all_returns_worst_code_and_keeps_going(self):
         path = self.run_dir / "tenants.json"
         path.write_text(json.dumps({"tenants": {

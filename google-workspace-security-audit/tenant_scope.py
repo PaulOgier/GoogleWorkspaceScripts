@@ -6917,9 +6917,31 @@ def load_tenants(path: Path) -> Dict[str, Dict]:
     except (OSError, json.JSONDecodeError) as exc:
         raise ConfigError(f"Cannot read {path}: {exc}")
     tenants = {}
-    for key, entry in (data.get("tenants") or {}).items():
+    listing = data.get("tenants") if isinstance(data, dict) else None
+    if not isinstance(listing, dict):
+        raise ConfigError(f"{path} needs a \"tenants\" object")
+    for key, entry in listing.items():
+        # The key becomes a folder name under --output-dir.
+        if (not key or key in (".", "..") or "/" in key or "\\" in key):
+            raise ConfigError(f"tenants key {key!r} cannot be a folder name")
+        if not isinstance(entry, dict):
+            raise ConfigError(f"tenants.{key} must be an object")
         if not entry.get("customer_id"):
             raise ConfigError(f"tenants.{key} has no customer_id")
+        # A wrong type here does not fail loudly later: an int customer ID
+        # never equals GAM's string, a string break_glass becomes letters,
+        # and "false" is truthy.
+        for field, kind in (("customer_id", str), ("name", str),
+                            ("gamcfgdir", str), ("admin", str),
+                            ("enabled", bool)):
+            if field in entry and not isinstance(entry[field], kind):
+                raise ConfigError(f"tenants.{key}.{field} must be a "
+                                  f"{'true/false' if kind is bool else 'string'}")
+        glass = entry.get("break_glass", [])
+        if not (isinstance(glass, list)
+                and all(isinstance(u, str) for u in glass)):
+            raise ConfigError(f"tenants.{key}.break_glass must be a list of "
+                              "addresses")
         entry = dict(entry, key=key)
         entry.setdefault("name", key)
         entry.setdefault("enabled", True)
