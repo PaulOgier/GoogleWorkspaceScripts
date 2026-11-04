@@ -304,7 +304,10 @@ every destination first, unsuspends, verifies the change by reading it back,
 runs the full offboarding, and re-suspends at the end. A guard re-suspends on
 every other exit path too. Without the flag an interactive run asks; a
 `--force` run continues without unsuspending and warns that the steps needing
-an active account will fail.
+an active account will fail. GYB's access to the mailbox is checked after the
+unsuspend, since GYB cannot open a suspended mailbox; a run with mailbox work
+that leaves the account suspended stops there, before any change. Restore-only
+(`--reuse-email-backup`) checks GYB's access to the destination instead.
 
 ## Deleting the account
 

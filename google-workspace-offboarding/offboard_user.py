@@ -1223,6 +1223,89 @@ def run_gam_parallel(calls: Dict[str, Tuple[List[str], dict]],
 # DEPENDENCY CHECKS [IMPORTANT]
 ###############################################################################
 
+def check_gyb_access(user_email: str, skip_disk_check: bool = False,
+                     suspended: bool = False) -> bool:
+    """Check GYB's service account can open `user_email`'s mailbox, and that
+    the backup volume has room for it (skipped with `skip_disk_check`).
+
+    main() calls this only once the mailbox is reachable: after a temporary
+    unsuspend, and against the restore destination in restore-only mode.
+    Run against a suspended leaver it fails, and the old DWD diagnosis sent
+    the operator to the wrong fix (OFF-02). `suspended` names that cause.
+    """
+    print_info(f"Verifying GYB service account access for {user_email}...")
+    try:
+        result = subprocess.run(
+            [GYB_COMMAND, "--email", user_email, "--action", "quota",
+             "--service-account"],
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL, timeout=30
+        )
+        output = (result.stdout + result.stderr).strip()
+        if result.returncode == 0:
+            print_success("GYB service account authorised")
+        else:
+            first = output.splitlines()[0] if output else 'no output'
+            if suspended:
+                print_error(
+                    f"GYB service account cannot access {user_email}, which "
+                    f"is suspended. Add --unsuspend, or --no-email to skip "
+                    f"the mailbox. Output: {first}"
+                )
+            else:
+                print_error(
+                    f"GYB service account cannot access {user_email}. "
+                    f"Ensure domain-wide delegation is configured for the "
+                    f"GYB service account with the Gmail API scope. "
+                    f"Output: {first}"
+                )
+            return False
+    except subprocess.TimeoutExpired:
+        print_error("GYB service account check timed out (30s). "
+                    "Check service account configuration.")
+        return False
+    except Exception as e:
+        print_error(f"GYB service account check failed: {e}")
+        return False
+
+    # A mailbox backup that outgrows the disk dies hours into an
+    # overnight run — the one failure class cheaper to catch here
+    # than to resume from. Estimate Gmail bytes from GAM's storage
+    # fields and compare with free space on the backup volume.
+    # Skipped in restore-only mode: nothing is downloaded there, and
+    # a disk that is nearly full BECAUSE the backup is already on it
+    # must not block its own restore.
+    est = None if skip_disk_check else _estimate_mailbox_bytes(user_email)
+    if est is not None:
+        probe = BACKUP_DIRECTORY
+        while not probe.exists() and probe.parent != probe:
+            probe = probe.parent
+        free = shutil.disk_usage(probe).free
+        gb = 1024 ** 3
+        print_info(
+            f"Mailbox size (estimated): {est / gb:.1f} GB; free on "
+            f"backup volume: {free / gb:.1f} GB."
+        )
+        if est > free:
+            print_error(
+                f"The mailbox (~{est / gb:.1f} GB) is larger than the "
+                f"free space on the backup volume ({free / gb:.1f} GB "
+                f"at {probe}). The GYB backup WILL fill the disk part "
+                f"way through. Free up space or point --backup-dir at "
+                f"a bigger volume."
+            )
+            return False
+        if est > free * 0.8:
+            print_warning(
+                f"The mailbox (~{est / gb:.1f} GB) would use over 80% "
+                f"of the backup volume's free space "
+                f"({free / gb:.1f} GB). Consider a bigger volume "
+                f"before starting a long download."
+            )
+    return True
+
+
 def check_dependencies(need_gyb: bool = False, need_rclone: bool = False,
                        user_email: str = "", dry_run: bool = True,
                        skip_disk_check: bool = False) -> bool:
@@ -1321,71 +1404,8 @@ def check_dependencies(need_gyb: bool = False, need_rclone: bool = False,
             return False
         print_success(f"GYB found: {gyb_path}")
 
-        # Validate GYB service account can impersonate the target user
-        if user_email:
-            print_info(f"Verifying GYB service account access for {user_email}...")
-            try:
-                result = subprocess.run(
-                    [GYB_COMMAND, "--email", user_email, "--action", "quota",
-                     "--service-account"],
-                    capture_output=True, text=True,
-                    encoding="utf-8", errors="replace",
-                    stdin=subprocess.DEVNULL, timeout=30
-                )
-                output = (result.stdout + result.stderr).strip()
-                if result.returncode == 0:
-                    print_success("GYB service account authorised")
-                else:
-                    print_error(
-                        f"GYB service account cannot access {user_email}. "
-                        f"Ensure domain-wide delegation is configured for the "
-                        f"GYB service account with the Gmail API scope. "
-                        f"Output: {output.splitlines()[0] if output else 'no output'}"
-                    )
-                    return False
-            except subprocess.TimeoutExpired:
-                print_error("GYB service account check timed out (30s). "
-                            "Check service account configuration.")
-                return False
-            except Exception as e:
-                print_error(f"GYB service account check failed: {e}")
-                return False
-
-            # A mailbox backup that outgrows the disk dies hours into an
-            # overnight run — the one failure class cheaper to catch here
-            # than to resume from. Estimate Gmail bytes from GAM's storage
-            # fields and compare with free space on the backup volume.
-            # Skipped in restore-only mode: nothing is downloaded there, and
-            # a disk that is nearly full BECAUSE the backup is already on it
-            # must not block its own restore.
-            est = None if skip_disk_check else _estimate_mailbox_bytes(user_email)
-            if est is not None:
-                probe = BACKUP_DIRECTORY
-                while not probe.exists() and probe.parent != probe:
-                    probe = probe.parent
-                free = shutil.disk_usage(probe).free
-                gb = 1024 ** 3
-                print_info(
-                    f"Mailbox size (estimated): {est / gb:.1f} GB; free on "
-                    f"backup volume: {free / gb:.1f} GB."
-                )
-                if est > free:
-                    print_error(
-                        f"The mailbox (~{est / gb:.1f} GB) is larger than the "
-                        f"free space on the backup volume ({free / gb:.1f} GB "
-                        f"at {probe}). The GYB backup WILL fill the disk part "
-                        f"way through. Free up space or point --backup-dir at "
-                        f"a bigger volume."
-                    )
-                    return False
-                if est > free * 0.8:
-                    print_warning(
-                        f"The mailbox (~{est / gb:.1f} GB) would use over 80% "
-                        f"of the backup volume's free space "
-                        f"({free / gb:.1f} GB). Consider a bigger volume "
-                        f"before starting a long download."
-                    )
-
+        if user_email and not check_gyb_access(user_email, skip_disk_check):
+            return False
 
     # Check rclone if needed
     if need_rclone:
@@ -5099,11 +5119,13 @@ def main():
         if getattr(args, flag):
             print_warning(f"--{flag.replace('_', '-')} enabled")
 
-    # Mode-aware dependency check
-    need_gyb = (not args.no_email) or args.backup_email or bool(args.reuse_email_backup)
+    # Mode-aware dependency check. GYB's access to a mailbox is checked
+    # later, once the mailbox it will read or write is reachable (OFF-02);
+    # scorched earth does no mailbox work.
+    need_gyb = ((not args.no_email) or args.backup_email
+                or bool(args.reuse_email_backup)) and not args.scorched_earth
     if not check_dependencies(need_gyb=need_gyb, need_rclone=args.backup_drive,
-                              user_email=user_email, dry_run=dry_run,
-                              skip_disk_check=bool(args.reuse_email_backup)):
+                              dry_run=dry_run):
         print_error("Dependency check failed. Aborting.")
         sys.exit(2)
 
@@ -5158,6 +5180,11 @@ def main():
         if not dry_run and not validate_destination(email_dest):
             print_error(f"Restore destination {email_dest} did not validate; aborting.")
             summary_error(f"Restore-only aborted: destination {email_dest} invalid")
+            sys.exit(2)
+        # The restore writes into the destination; the leaver's mailbox is
+        # never read here, and is usually suspended by now.
+        if not check_gyb_access(email_dest, skip_disk_check=True):
+            print_error("Dependency check failed. Aborting.")
             sys.exit(2)
         strip_labels = args.strip_labels if args.strip_labels is not None else True
         print_header("RESTORE-ONLY MODE (resume email restore from existing backup)")
@@ -5230,6 +5257,17 @@ def main():
                 if not dry_run:
                     restore_original_suspension(user_email)
                 sys.exit(2)
+
+    # GYB can open the leaver's mailbox only while the account is active, so
+    # this waits for the temporary unsuspend (OFF-02).
+    if need_gyb:
+        if dry_run and temp_unsuspended:
+            print_warning(f"GYB access to {user_email} not checked: the account "
+                          f"stays suspended until a live run unsuspends it.")
+        elif not check_gyb_access(user_email, suspended=is_suspended):
+            print_error("Dependency check failed. Aborting before any offboarding change.")
+            finish_run(dry_run)
+            sys.exit(2)
 
     # --- Scorched earth confirmation (even with --force, must type email) ---
     if args.scorched_earth and not dry_run:

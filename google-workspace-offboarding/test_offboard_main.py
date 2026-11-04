@@ -204,7 +204,7 @@ class MainFlowCase(unittest.TestCase):
         self.gyb_calls = []
         self.inputs = []
 
-    def run_main(self, gam, *argv, gyb_ok=True, popen=None, inputs=()):
+    def run_main(self, gam, *argv, gyb_ok=True, popen=None, inputs=(), quota=None):
         """Invoke main() with argv; returns the SystemExit code."""
         self.inputs = list(inputs)
         full_argv = ["offboard_user.py", *argv,
@@ -229,6 +229,8 @@ class MainFlowCase(unittest.TestCase):
         def fake_run(cmd, *a, **kw):
             if cmd[:1] == ["rclone"]:
                 return FakeCompleted("workspace:\n", 0)
+            if quota and "quota" in cmd:
+                return quota(cmd)
             return FakeCompleted("", 0)  # gyb quota probe
 
         def fake_input(prompt=""):
@@ -510,6 +512,48 @@ class TestTemporaryUnsuspend(MainFlowCase):
                             for a in offb.summary_actions))
         self.assertTrue(gam.suspended)
 
+    @staticmethod
+    def _active_successor(gam):
+        """ScriptedGam answers every `info user` with the leaver's state."""
+        gam.rule(("info", "user", SUCCESSOR),
+                 (True, quick_fields().replace(LEAVER, SUCCESSOR)))
+        return gam
+
+    def _quota_while_active(self, gam, probed):
+        """GYB's quota probe, failing while the account it names is suspended."""
+        def quota(cmd):
+            who = cmd[cmd.index("--email") + 1]
+            probed.append((who, gam.suspended))
+            if who == LEAVER and gam.suspended:
+                return FakeCompleted("ERROR: 400 failedPrecondition", 1)
+            return FakeCompleted("", 0)
+        return quota
+
+    def test_mailbox_work_on_a_suspended_leaver_probes_gyb_after_the_unsuspend(self):
+        """OFF-02: the GYB probe used to run before the unsuspend and refuse."""
+        gam = self._active_successor(ScriptedGam(suspended=True))
+        gam.rule(("user", LEAVER, "show", "forwardingaddresses"),
+                 (True, f"  Forwarding Address: {SUCCESSOR}, Verification Status: accepted"))
+        probed = []
+        code = self.run_main(gam, "--doit", "--force", "--unsuspend",
+                             "--user", LEAVER, "--all-transfer-to", SUCCESSOR,
+                             quota=self._quota_while_active(gam, probed))
+        self.assertEqual(code, 0, offb.summary_errors)
+        self.assertEqual(probed, [(LEAVER, False)])
+        self.assertTrue(any("Email migrated" in a for a in offb.summary_actions))
+
+    def test_suspended_leaver_without_unsuspend_names_the_suspension(self):
+        gam = self._active_successor(ScriptedGam(suspended=True))
+        printed = []
+        with mock.patch.object(offb, "print_error", printed.append):
+            code = self.run_main(gam, "--doit", "--force", "--user", LEAVER,
+                                 "--all-transfer-to", SUCCESSOR,
+                                 quota=self._quota_while_active(gam, []))
+        self.assertEqual(code, 2)
+        self.assertEqual(gam.writes(), [])
+        self.assertTrue(any("which is suspended" in p and "--unsuspend" in p
+                            for p in printed), printed)
+
     def test_failed_resuspend_is_not_reported_as_resuspended(self):
         gam = ScriptedGam(suspended=True)
 
@@ -587,6 +631,24 @@ class TestRestoreOnly(MainFlowCase):
         self.assertEqual(gam.writes(), [])
         self.assertTrue(any("restore" in c and "--local-folder" in c for c in self.gyb_calls))
         self.assertFalse(any("backup" in c for c in self.gyb_calls))
+
+    def test_reuse_email_backup_probes_gyb_on_the_destination_not_the_leaver(self):
+        """OFF-02: restore-only writes into the destination; the suspended
+        leaver's mailbox is never read, so it must not be probed."""
+        gam = TestTemporaryUnsuspend._active_successor(ScriptedGam(suspended=True))
+        backup = self.tmp / "old_backup"
+        backup.mkdir()
+        probed = []
+
+        def quota(cmd):
+            who = cmd[cmd.index("--email") + 1]
+            probed.append(who)
+            return FakeCompleted("", 0) if who == SUCCESSOR else FakeCompleted("ERROR", 1)
+        self.run_main(gam, "--doit", "--force", "--user", LEAVER,
+                      "--reuse-email-backup", str(backup), "--email-to", SUCCESSOR,
+                      quota=quota)
+        self.assertEqual(probed, [SUCCESSOR])
+        self.assertFalse(any("Dependency check" in e for e in offb.summary_errors))
 
     def test_reuse_email_backup_refuses_the_leaver_as_destination(self):
         gam = ScriptedGam()
