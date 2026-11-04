@@ -41,8 +41,8 @@ YOU ASSUME ALL RISK ASSOCIATED WITH THE USE OF THIS SOFTWARE.
 
 Author:       Paul Ogier
 Created:      2023-06-22
-Updated:      2026-10-21
-Version:      5.7.2
+Updated:      2026-11-04
+Version:      5.8.0
 Status:       Production
 Python:       3.8+
 Dependencies: GAM ADV X (GAM7), GYB (optional), rclone (optional)
@@ -153,6 +153,23 @@ Changelog
   2026-05-07 - v4.4.0 - Added startup version check against remote VERSION file (CHECK_FOR_UPDATES toggle, fail-silent); restored author/contact header with Outsource House copyright and three Udemy course links; aligned in-script licence reference with the repo LICENSE (Apache 2.0) and added a plain-English summary emphasising attribution retention.
   2026-05-13 - v4.5.0 - BREAKING: renamed --transfer-to to --all-transfer-to. Added per-phase destination flags (--drive-to, --email-to, --alias-to, --calendar-to, --forward-to) that override the global default; precedence is phase-specific > --all-transfer-to > interactive prompt. Added upfront destination resolution and validation before any phase runs: under --force, any non-skipped phase without a resolvable destination aborts the run with a clear error instead of half-offboarding.
   2026-05-14 - v4.6.0 - Added end-of-run MANUAL ACTION block surfacing admin-console instructions for durable mail capture (alias / recipient address map / group) since GAM cannot configure recipient address map and Gmail-level forwarding stops on suspension/deletion; new --forward-alias-to flag explicitly nominates the successor printed in the block (falls back to --forward-to then --all-transfer-to), no automated change is made. Guide gains a "Mail capture after suspension" section and the order-of-operations list flags forwarding's suspension limitation.
+  2026-11-04 - v5.8.0 - A run stopped by Ctrl+C or SIGTERM exits 130 and the
+                        summary names the last phase that ran; the run stops
+                        between every transfer phase, so an interrupted
+                        transfer no longer blames a valid successor. A Ctrl+C
+                        after an alias delete still re-creates that alias.
+                        GYB's access check runs after the temporary unsuspend
+                        (on the destination in restore-only), so --unsuspend
+                        works with mailbox work. A failed --backup-drive holds
+                        the Drive transfer. --reuse-email-backup reconciles the
+                        backup against disk. Flags that were ignored are usage
+                        errors, --force needs --user, the admin-account hold
+                        exits 2. Devices are listed with their IDs; the log
+                        file has no colour codes; GYB and rclone output is read
+                        as it arrives; backup folders are chosen with the plan.
+                        Command builder: the combinations the script refuses
+                        are refused, restore-only works, PowerShell trailing
+                        backslashes are doubled. 273 tests.
   2026-10-21 - v5.7.2 - Scorched earth no longer deletes the account when the
                         Shared Drive list cannot be read or parsed; it refuses
                         (exit 2), as it already did for an unreadable drive ACL.
@@ -506,7 +523,7 @@ import shutil
 
 # [IMPORTANT] Current local script version. Bumped on each release.
 # Compared against the remote VERSION file to detect updates.
-SCRIPT_VERSION = "5.7.2"
+SCRIPT_VERSION = "5.8.0"
 
 # [OPTIONAL] Check for a newer script version on startup.
 # When True (default), the script makes a single 3-second HTTP request to
