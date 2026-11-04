@@ -420,6 +420,13 @@ def test_paste():
         after = termios.tcgetattr(slave)[3]
         os.close(master), os.close(slave)
         assert seen and not seen[0] & termios.ICANON and after & termios.ICANON and after & termios.ECHO, (seen, after)
+        # a terminal gone between the blank line and the wait (ssh dropped) still gives a verdict, not a traceback
+        with open(os.devnull) as null:
+            saved_stdin, sys.stdin = sys.stdin, null
+            try:
+                g._input_pending(0.01)
+            finally:
+                sys.stdin = saved_stdin
     # Prompts copied from forum posts along with the command.
     for prompt in ('$ ', '> ', 'PS C:\\GAM7> ', 'C:\\GAM7>'):
         code, out, _ = run(prompt + 'gam user bob@example.com delete messages query x doit\n', '-')
@@ -729,6 +736,9 @@ AUDIT_2026_11 += [
     ('gam info domain\npython3 - \\\n  <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
     ('gam info domain\npython3 \\\n  - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
     ('gam info domain\n$(command -v python3) - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    ('gam info domain\n`which python3` - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
+    # bash joins backslash-newline first, so a heredoc body starts after the whole logical line
+    ('gam info domain\ncat <<\'A\' \\\n; python3 - <<\'B\'\na\nA\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nB', 'shell', g.DESTRUCTIVE, 'floor'),
     # a heredoc that never finds its end marker was probably misread, so the script cannot be read as safe
     ('gam info domain\ncat <<E`x y`\nbody\nE`x y`\nx="a\nb # c"; gam print users', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\ncat <<E`x`\nE\nx="a\nE`x`\nmsg=\'a # b\'; gam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),

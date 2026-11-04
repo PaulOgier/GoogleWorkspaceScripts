@@ -1123,7 +1123,7 @@ def _logical_lines(text, lang):
     if lang == 'powershell':
         text = re.sub(r'<#.*?#>', lambda m: '\n' * m.group(0).count('\n'), text, flags=re.S)
     cont = {'shell': '\\', 'gambatch': None, 'powershell': '`', 'batch': '^'}[lang]
-    out, buf, start, quote, heredoc = [], '', None, '', None
+    out, buf, start, quote, heredoc, pending, opener = [], '', None, '', None, [], None
     bodies = {}  # logical line heredocs start on -> one [(line, text as written)] list per heredoc, in order
     for n, raw in enumerate(text.splitlines(), 1):
         if heredoc:
@@ -1141,9 +1141,7 @@ def _logical_lines(text, lang):
             raw, quote = _strip_comment(raw, lang, quote)
             start_doc = None if carried else _heredoc_start(raw, lang)
             if start_doc:
-                # keyed by the logical line, which is where the checker looks them up (python3 - \ / <<'EOF')
-                heredoc, quote, heredoc_line = start_doc, '', n if start is None else start
-                bodies.setdefault(heredoc_line, []).append([])
+                pending, quote, opener = pending + start_doc, '', n
         stripped = raw.rstrip()
         if start is None:
             start = n
@@ -1152,11 +1150,16 @@ def _logical_lines(text, lang):
             continue
         buf += raw
         out.append((start, buf))
+        if pending:
+            # bash joins backslash-newline before reading a heredoc, so the body starts after the whole
+            # logical line (cat <<'A' \ / ; python3 - <<'B'), and is keyed by it, where the checker looks
+            heredoc, heredoc_line, pending = pending, start, []
+            bodies.setdefault(heredoc_line, []).append([])
         buf, start = '', None
     if buf:
         out.append((start, buf))
     out = _Lines(out)
-    out.unclosed, out.bodies = (heredoc_line if heredoc else None), bodies
+    out.unclosed, out.bodies = (opener if heredoc or pending else None), bodies
     return out
 
 
@@ -1747,8 +1750,9 @@ class Checker:
         if k < len(seg) and not is_py(seg[k]) and name(seg[k]) in PREFIX_WORDS - SCRIPT_RUNNERS:
             k = next((j for j in range(k + 1, len(seg)) if is_py(seg[j])), len(seg))
         own = [j for j, t in enumerate(raw) if t in ('<<', '<<-')]
-        # $(command -v python3) - <<'EOF' reaches here as '- << EOF': the program came from a substitution
-        if docs and own and k < len(seg) and seg[k].startswith('-'):
+        # $(command -v python3) - <<'EOF' reaches here as '- << EOF', `which python3` - as '`which': the
+        # program came from a substitution
+        if docs and own and k < len(seg) and seg[k].startswith(('-', '`', '$(')):
             return 'the program reading this heredoc is chosen at runtime'
         if not docs or not own or k >= len(seg) or not is_py(seg[k]):
             return None
@@ -2646,20 +2650,26 @@ def _input_pending(timeout):
         old = None
         try:
             import termios
+        except ImportError:
+            termios = None
+        try:
             fd = sys.stdin.fileno()
             old = termios.tcgetattr(fd)
             raw = old[:3] + [old[3] & ~(termios.ICANON | termios.ECHO)] + old[4:6] + [list(old[6])]
             raw[6][termios.VMIN], raw[6][termios.VTIME] = 1, 0
             termios.tcsetattr(fd, termios.TCSANOW, raw)
-        except (ImportError, OSError, ValueError, AttributeError):
-            old = None
+        except (OSError, ValueError, AttributeError, getattr(termios, 'error', OSError)):
+            old = None  # not a terminal any more (an ssh link dropped): wait without it
         try:
             return bool(select.select([sys.stdin], [], [], timeout)[0])
         except (OSError, ValueError):
             return False
         finally:
             if old is not None:
-                termios.tcsetattr(fd, termios.TCSANOW, old)
+                try:
+                    termios.tcsetattr(fd, termios.TCSANOW, old)
+                except (OSError, ValueError, termios.error):
+                    pass
     import time
     end = time.monotonic() + timeout
     while time.monotonic() < end:
