@@ -1124,7 +1124,7 @@ def _logical_lines(text, lang):
         text = re.sub(r'<#.*?#>', lambda m: '\n' * m.group(0).count('\n'), text, flags=re.S)
     cont = {'shell': '\\', 'gambatch': None, 'powershell': '`', 'batch': '^'}[lang]
     out, buf, start, quote, heredoc = [], '', None, '', None
-    bodies = {}  # line heredocs start on -> one [(line, text as written)] list per heredoc, in order
+    bodies = {}  # logical line heredocs start on -> one [(line, text as written)] list per heredoc, in order
     for n, raw in enumerate(text.splitlines(), 1):
         if heredoc:
             # a heredoc or here-string body: read line by line, and an apostrophe in it opens no quote
@@ -1141,8 +1141,9 @@ def _logical_lines(text, lang):
             raw, quote = _strip_comment(raw, lang, quote)
             start_doc = None if carried else _heredoc_start(raw, lang)
             if start_doc:
-                heredoc, quote, heredoc_line = start_doc, '', n
-                bodies[n] = [[]]
+                # keyed by the logical line, which is where the checker looks them up (python3 - \ / <<'EOF')
+                heredoc, quote, heredoc_line = start_doc, '', n if start is None else start
+                bodies.setdefault(heredoc_line, []).append([])
         stripped = raw.rstrip()
         if start is None:
             start = n
@@ -1161,7 +1162,7 @@ def _logical_lines(text, lang):
 
 class _Lines(list):
     """Logical lines; unclosed is the line of a heredoc that never found its end marker, else None;
-    bodies maps the line heredocs start on to each heredoc's body lines as written, in order."""
+    bodies maps the logical line heredocs start on to each heredoc's body lines as written, in order."""
     unclosed, bodies = None, {}
 
 
@@ -1737,11 +1738,19 @@ class Checker:
         """
         seg = self._drop_redirects(raw)
         k = 0
-        while k < len(seg) and (re.fullmatch(r'[A-Za-z_]\w*=.*', seg[k]) or seg[k].lower() in PREFIX_WORDS - SCRIPT_RUNNERS):
+        while k < len(seg) and re.fullmatch(r'[A-Za-z_]\w*=.*', seg[k]):
             k += 1
+        # $(command -v python3) splits into '$(command' and 'python3)', so $ ( ) are stripped with the quotes
+        name = lambda t: re.split(r'[\\/]', t.strip('`"\'$()'))[-1].lower().removesuffix('.exe')
+        is_py = lambda t: re.fullmatch(r'python[\d.]*|py', name(t))
+        # after a prefix word (timeout 60, sudo -u x, /usr/bin/env) python can sit behind its options, as in _piped_shell
+        if k < len(seg) and not is_py(seg[k]) and name(seg[k]) in PREFIX_WORDS - SCRIPT_RUNNERS:
+            k = next((j for j in range(k + 1, len(seg)) if is_py(seg[j])), len(seg))
         own = [j for j, t in enumerate(raw) if t in ('<<', '<<-')]
-        if not docs or not own or k >= len(seg) or \
-                not re.fullmatch(r'(?i)python[\d.]*|py', re.split(r'[\\/]', seg[k].strip('`"\''))[-1].removesuffix('.exe')):
+        # $(command -v python3) - <<'EOF' reaches here as '- << EOF': the program came from a substitution
+        if docs and own and k < len(seg) and seg[k].startswith('-'):
+            return 'the program reading this heredoc is chosen at runtime'
+        if not docs or not own or k >= len(seg) or not is_py(seg[k]):
             return None
         args = seg[k + 1:]
         # a script file, -c CODE or -m MOD (also glued, -mjson.tool, or after no-value flags, -uc): not the heredoc;

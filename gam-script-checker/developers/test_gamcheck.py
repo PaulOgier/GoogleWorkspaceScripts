@@ -706,6 +706,13 @@ AUDIT_2026_11 += [
     ('gam info domain\npython3 -x - <<\'EOF\'\n"""\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\npython3 - <<\'EOF\' <prog.py\nprint(1)\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\ncat x | python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
+    # python behind a prefix word's own options or a path, and a heredoc on a continuation line, are still read as Python
+    ('gam info domain\ntimeout 60 python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\nsudo -u svc python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\n/usr/bin/env python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\npython3 - \\\n  <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\npython3 \\\n  - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.DESTRUCTIVE, 'floor'),
+    ('gam info domain\n$(command -v python3) - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     # a heredoc that never finds its end marker was probably misread, so the script cannot be read as safe
     ('gam info domain\ncat <<E`x y`\nbody\nE`x y`\nx="a\nb # c"; gam print users', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\ncat <<E`x`\nE\nx="a\nE`x`\nmsg=\'a # b\'; gam delete user bob@example.com', 'shell', g.DESTRUCTIVE, 'floor'),
