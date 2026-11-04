@@ -10,7 +10,7 @@
   "BATCH_CMD": "batch",
   "BROWSER_ENTITIES": [
    "ids",
-   "browserqueies",
+   "browserqueries",
    "browserquery",
    "browserou",
    "browserous"
@@ -291,6 +291,7 @@
   "api_calls_rate_limit",
   "api_calls_tries_limit",
   "auto_batch_min",
+  "auto_downgrade_http2",
   "bail_on_internal_error_tries",
   "batch_size",
   "cacerts_pem",
@@ -350,6 +351,7 @@
   "enable_gcloud_reauth",
   "event_max_results",
   "extra_args",
+  "force_http11",
   "gcp_org_id",
   "gmail_cse_incert_dir",
   "gmail_cse_inkey_dir",
@@ -401,6 +403,8 @@
   "timezone",
   "tls_max_version",
   "tls_min_version",
+  "todrive_cellnumberformat",
+  "todrive_cellwrap",
   "todrive_clearfilter",
   "todrive_clientaccess",
   "todrive_conversion",
@@ -426,7 +430,7 @@
   "user_service_account_access_only"
  ],
  "dialect": "modern",
- "gam_version": "7.48.20",
+ "gam_version": "7.50.00",
  "pairs": [
   [
    "main",
@@ -557,13 +561,6 @@
   [
    "main",
    "add",
-   "browsertoken",
-   "ADD",
-   "doCreateBrowserToken"
-  ],
-  [
-   "main",
-   "add",
    "building",
    "ADD",
    "doCreateBuilding"
@@ -581,6 +578,13 @@
    "chatmessage",
    "ADD",
    "doCreateChatMessage"
+  ],
+  [
+   "main",
+   "add",
+   "chromebrowsertoken",
+   "ADD",
+   "doCreateChromeBrowserToken"
   ],
   [
    "main",
@@ -1068,13 +1072,6 @@
   [
    "main",
    "create",
-   "browsertoken",
-   "CREATE",
-   "doCreateBrowserToken"
-  ],
-  [
-   "main",
-   "create",
    "building",
    "CREATE",
    "doCreateBuilding"
@@ -1092,6 +1089,13 @@
    "chatmessage",
    "CREATE",
    "doCreateChatMessage"
+  ],
+  [
+   "main",
+   "create",
+   "chromebrowsertoken",
+   "CREATE",
+   "doCreateChromeBrowserToken"
   ],
   [
    "main",
@@ -1446,13 +1450,6 @@
   [
    "main",
    "delete",
-   "browser",
-   "DELETE",
-   "doDeleteBrowsers"
-  ],
-  [
-   "main",
-   "delete",
    "building",
    "DELETE",
    "doDeleteBuilding"
@@ -1470,6 +1467,13 @@
    "chatmessage",
    "DELETE",
    "doDeleteChatMessage"
+  ],
+  [
+   "main",
+   "delete",
+   "chromebrowser",
+   "DELETE",
+   "doDeleteChromeBrowsers"
   ],
   [
    "main",
@@ -1880,13 +1884,6 @@
   [
    "main",
    "info",
-   "browser",
-   "INFO",
-   "doInfoBrowsers"
-  ],
-  [
-   "main",
-   "info",
    "chatevent",
    "INFO",
    "doInfoChatEvent"
@@ -1922,6 +1919,20 @@
   [
    "main",
    "info",
+   "chromebrowser",
+   "INFO",
+   "doInfoChromeBrowser"
+  ],
+  [
+   "main",
+   "info",
+   "chromebrowsertoken",
+   "INFO",
+   "doInfoChromeBrowserToken"
+  ],
+  [
+   "main",
+   "info",
    "chromeprofile",
    "INFO",
    "doInfoChromeProfile"
@@ -1939,6 +1950,13 @@
    "chromeschema",
    "INFO",
    "doInfoChromePolicySchemas"
+  ],
+  [
+   "main",
+   "info",
+   "chrometelemetry",
+   "INFO",
+   "doInfoPrintShowChromeTelemetry"
   ],
   [
    "main",
@@ -1995,13 +2013,6 @@
    "cros",
    "INFO",
    "doInfoCrOSDevices"
-  ],
-  [
-   "main",
-   "info",
-   "crostelemetry",
-   "INFO",
-   "doInfoPrintShowCrOSTelemetry"
   ],
   [
    "main",
@@ -2300,9 +2311,9 @@
   [
    "main",
    "move",
-   "browser",
+   "chromebrowser",
    "MOVE",
-   "doMoveBrowsers"
+   "doMoveChromeBrowsers"
   ],
   [
    "main",
@@ -2345,20 +2356,6 @@
    "alias",
    "PRINT",
    "doPrintAliases"
-  ],
-  [
-   "main",
-   "print",
-   "browser",
-   "PRINT",
-   "doPrintShowBrowsers"
-  ],
-  [
-   "main",
-   "print",
-   "browsertoken",
-   "PRINT",
-   "doPrintShowBrowserTokens"
   ],
   [
    "main",
@@ -2454,6 +2451,13 @@
   [
    "main",
    "print",
+   "chromebrowsertoken",
+   "PRINT",
+   "doPrintShowChromeBrowserTokens"
+  ],
+  [
+   "main",
+   "print",
    "chromedevicecounts",
    "PRINT",
    "doPrintShowChromeDeviceCounts"
@@ -2506,6 +2510,13 @@
    "chromesnvalidity",
    "PRINT",
    "doPrintChromeSnValidity"
+  ],
+  [
+   "main",
+   "print",
+   "chrometelemetry",
+   "PRINT",
+   "doInfoPrintShowChromeTelemetry"
   ],
   [
    "main",
@@ -2646,13 +2657,6 @@
    "crosactivity",
    "PRINT",
    "doPrintCrOSActivity"
-  ],
-  [
-   "main",
-   "print",
-   "crostelemetry",
-   "PRINT",
-   "doInfoPrintShowCrOSTelemetry"
   ],
   [
    "main",
@@ -3049,9 +3053,9 @@
   [
    "main",
    "revoke",
-   "browsertoken",
+   "chromebrowsertoken",
    "REVOKE",
-   "doRevokeBrowserToken"
+   "doRevokeChromeBrowserToken"
   ],
   [
    "main",
@@ -3101,20 +3105,6 @@
    "alertsettings",
    "SHOW",
    "doShowAlertSettings"
-  ],
-  [
-   "main",
-   "show",
-   "browser",
-   "SHOW",
-   "doPrintShowBrowsers"
-  ],
-  [
-   "main",
-   "show",
-   "browsertoken",
-   "SHOW",
-   "doPrintShowBrowserTokens"
   ],
   [
    "main",
@@ -3210,6 +3200,13 @@
   [
    "main",
    "show",
+   "chromebrowsertoken",
+   "SHOW",
+   "doPrintShowChromeBrowserTokens"
+  ],
+  [
+   "main",
+   "show",
    "chromedevicecounts",
    "SHOW",
    "doPrintShowChromeDeviceCounts"
@@ -3259,6 +3256,13 @@
   [
    "main",
    "show",
+   "chrometelemetry",
+   "SHOW",
+   "doInfoPrintShowChromeTelemetry"
+  ],
+  [
+   "main",
+   "show",
    "chromeversions",
    "SHOW",
    "doPrintShowChromeVersions"
@@ -3304,13 +3308,6 @@
    "contact",
    "SHOW",
    "doPrintShowDomainContacts"
-  ],
-  [
-   "main",
-   "show",
-   "crostelemetry",
-   "SHOW",
-   "doInfoPrintShowCrOSTelemetry"
   ],
   [
    "main",
@@ -3679,13 +3676,6 @@
   [
    "main",
    "update",
-   "browser",
-   "UPDATE",
-   "doUpdateBrowsers"
-  ],
-  [
-   "main",
-   "update",
    "building",
    "UPDATE",
    "doUpdateBuilding"
@@ -3703,6 +3693,13 @@
    "chatmessage",
    "UPDATE",
    "doUpdateChatMessage"
+  ],
+  [
+   "main",
+   "update",
+   "chromebrowser",
+   "UPDATE",
+   "doUpdateChromeBrowsers"
   ],
   [
    "main",
@@ -8348,8 +8345,10 @@
    "apiproject": "project",
    "apis": "api",
    "appdetails": "chromeapp",
-   "browsers": "browser",
-   "browsertokens": "browsertoken",
+   "browser": "chromebrowser",
+   "browsers": "chromebrowser",
+   "browsertoken": "chromebrowsertoken",
+   "browsertokens": "chromebrowsertoken",
    "bucket": "storagebucket",
    "buckets": "storagebucket",
    "buildings": "building",
@@ -8363,6 +8362,7 @@
    "chatspaces": "chatspace",
    "chromeapps": "chromeapp",
    "chromebrowsers": "chromebrowser",
+   "chromebrowsertokens": "chromebrowsertoken",
    "chromenetworks": "chromenetwork",
    "chromepolicies": "chromepolicy",
    "chromeprofilecommands": "chromeprofilecommand",
@@ -8385,6 +8385,7 @@
    "contacts": "contact",
    "coursestudentgroups": "coursestudentgroup",
    "croses": "cros",
+   "crostelemetry": "chrometelemetry",
    "datatransfers": "datatransfer",
    "devicefiles": "devicefile",
    "devices": "device",
@@ -8480,10 +8481,10 @@
      "alertfeedback": "doCreateAlertFeedback",
      "alias": "doCreateUpdateAliases",
      "allowlisteddomain": "doCreateCIAllowlistedDomains",
-     "browsertoken": "doCreateBrowserToken",
      "building": "doCreateBuilding",
      "caalevel": "doCreateCAALevel",
      "chatmessage": "doCreateChatMessage",
+     "chromebrowsertoken": "doCreateChromeBrowserToken",
      "chromenetwork": "doCreateChromeNetwork",
      "chromepolicyimage": "doCreateChromePolicyImage",
      "chromeprofilecommand": "doCreateChromeProfileCommand",
@@ -8598,10 +8599,10 @@
      "alertfeedback": "doCreateAlertFeedback",
      "alias": "doCreateUpdateAliases",
      "allowlisteddomain": "doCreateCIAllowlistedDomains",
-     "browsertoken": "doCreateBrowserToken",
      "building": "doCreateBuilding",
      "caalevel": "doCreateCAALevel",
      "chatmessage": "doCreateChatMessage",
+     "chromebrowsertoken": "doCreateChromeBrowserToken",
      "chromenetwork": "doCreateChromeNetwork",
      "chromepolicyimage": "doCreateChromePolicyImage",
      "chromeprofilecommand": "doCreateChromeProfileCommand",
@@ -8662,10 +8663,10 @@
      "alert": "doDeleteOrUndeleteAlert",
      "alias": "doDeleteAliases",
      "allowlisteddomain": "doDeleteCIAllowlistedDomains",
-     "browser": "doDeleteBrowsers",
      "building": "doDeleteBuilding",
      "caalevel": "doDeleteCAALevel",
      "chatmessage": "doDeleteChatMessage",
+     "chromebrowser": "doDeleteChromeBrowsers",
      "chromenetwork": "doDeleteChromeNetwork",
      "chromepolicy": "doDeleteChromePolicy",
      "chromeprofile": "doDeleteChromeProfile",
@@ -8753,23 +8754,24 @@
      "alert": "doInfoAlert",
      "alias": "doInfoAliases",
      "allowlisteddomain": "doInfoCIAllowlistedDomains",
-     "browser": "doInfoBrowsers",
      "building": "doInfoBuilding",
      "chatevent": "doInfoChatEvent",
      "chatmember": "doInfoChatMember",
      "chatmessage": "doInfoChatMessage",
      "chatspace": "doInfoChatSpace",
      "chromeapp": "doInfoChromeApp",
+     "chromebrowser": "doInfoChromeBrowser",
+     "chromebrowsertoken": "doInfoChromeBrowserToken",
      "chromeprofile": "doInfoChromeProfile",
      "chromeprofilecommand": "doInfoChromeProfileCommand",
      "chromeschema": "doInfoChromePolicySchemas",
+     "chrometelemetry": "doInfoPrintShowChromeTelemetry",
      "cigroup": "doInfoCIGroups",
      "cigroupmembers": "doInfoCIGroupMembers",
      "contact": "doInfoDomainContacts",
      "course": "doInfoCourse",
      "courses": "doInfoCourses",
      "cros": "doInfoCrOSDevices",
-     "crostelemetry": "doInfoPrintShowCrOSTelemetry",
      "currentprojectid": "doInfoCurrentProjectId",
      "customer": "doInfoCustomer",
      "customerid": "doInfoCustomerId",
@@ -8823,7 +8825,7 @@
    "move": [
     "MOVE",
     {
-     "browser": "doMoveBrowsers"
+     "chromebrowser": "doMoveChromeBrowsers"
     }
    ],
    "print": [
@@ -8836,8 +8838,6 @@
      "alertfeedback": "doPrintShowAlertFeedback",
      "alias": "doPrintAliases",
      "allowlisteddomain": "doPrintShowCIAllowlistedDomains",
-     "browser": "doPrintShowBrowsers",
-     "browsertoken": "doPrintShowBrowserTokens",
      "building": "doPrintShowBuildings",
      "caalevel": "doPrintShowCAALevels",
      "channelcustomer": "doPrintShowChannelCustomers",
@@ -8851,6 +8851,7 @@
      "chromeappdevices": "doPrintShowChromeAppDevices",
      "chromeaues": "doPrintShowChromeAues",
      "chromebrowser": "doPrintShowChromeBrowsers",
+     "chromebrowsertoken": "doPrintShowChromeBrowserTokens",
      "chromedevicecounts": "doPrintShowChromeDeviceCounts",
      "chromehistory": "doPrintShowChromeHistory",
      "chromeneedsattn": "doPrintShowChromeNeedsAttn",
@@ -8859,6 +8860,7 @@
      "chromeprofilecommand": "doPrintShowChromeProfileCommands",
      "chromeschema": "doPrintShowChromePolicySchemas",
      "chromesnvalidity": "doPrintChromeSnValidity",
+     "chrometelemetry": "doInfoPrintShowChromeTelemetry",
      "chromeversions": "doPrintShowChromeVersions",
      "cigroup": "doPrintCIGroups",
      "cigroupmembers": "doPrintCIGroupMembers",
@@ -8877,7 +8879,6 @@
      "coursework": "doPrintCourseWork",
      "cros": "doPrintCrOSDevices",
      "crosactivity": "doPrintCrOSActivity",
-     "crostelemetry": "doInfoPrintShowCrOSTelemetry",
      "datatransfer": "doPrintShowDataTransfers",
      "device": "doPrintCIDevices",
      "deviceuser": "doPrintCIDeviceUsers",
@@ -8954,7 +8955,7 @@
    "revoke": [
     "REVOKE",
     {
-     "browsertoken": "doRevokeBrowserToken"
+     "chromebrowsertoken": "doRevokeChromeBrowserToken"
     }
    ],
    "rotate": [
@@ -8984,8 +8985,6 @@
      "alertfeedback": "doPrintShowAlertFeedback",
      "alertsettings": "doShowAlertSettings",
      "allowlisteddomain": "doPrintShowCIAllowlistedDomains",
-     "browser": "doPrintShowBrowsers",
-     "browsertoken": "doPrintShowBrowserTokens",
      "building": "doPrintShowBuildings",
      "caalevel": "doPrintShowCAALevels",
      "channelcustomer": "doPrintShowChannelCustomers",
@@ -8999,6 +8998,7 @@
      "chromeappdevices": "doPrintShowChromeAppDevices",
      "chromeaues": "doPrintShowChromeAues",
      "chromebrowser": "doPrintShowChromeBrowsers",
+     "chromebrowsertoken": "doPrintShowChromeBrowserTokens",
      "chromedevicecounts": "doPrintShowChromeDeviceCounts",
      "chromehistory": "doPrintShowChromeHistory",
      "chromeneedsattn": "doPrintShowChromeNeedsAttn",
@@ -9006,12 +9006,12 @@
      "chromeprofile": "doPrintShowChromeProfiles",
      "chromeprofilecommand": "doPrintShowChromeProfileCommands",
      "chromeschema": "doPrintShowChromePolicySchemas",
+     "chrometelemetry": "doInfoPrintShowChromeTelemetry",
      "chromeversions": "doPrintShowChromeVersions",
      "cigroupmembers": "doShowCIGroupMembers",
      "classroominvitation": "doPrintShowClassroomInvitations",
      "configlicenseskus": "doShowConfigLicenseSKUs",
      "contact": "doPrintShowDomainContacts",
-     "crostelemetry": "doInfoPrintShowCrOSTelemetry",
      "datatransfer": "doPrintShowDataTransfers",
      "domain": "doPrintShowDomains",
      "domainalias": "doPrintShowDomainAliases",
@@ -9101,10 +9101,10 @@
      "adminrole": "doCreateUpdateAdminRoles",
      "alertsettings": "doUpdateAlertSettings",
      "alias": "doCreateUpdateAliases",
-     "browser": "doUpdateBrowsers",
      "building": "doUpdateBuilding",
      "caalevel": "doUpdateCAALevel",
      "chatmessage": "doUpdateChatMessage",
+     "chromebrowser": "doUpdateChromeBrowsers",
      "chromepolicy": "doUpdateChromePolicy",
      "cigroup": "doUpdateCIGroups",
      "contact": "doUpdateDomainContacts",
