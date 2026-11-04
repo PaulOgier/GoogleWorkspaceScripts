@@ -1896,6 +1896,9 @@ def restore_original_suspension(email: str, attempts: int = 3,
     return False
 
 
+EMAIL_PATTERN = r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$'
+
+
 def prompt_email(question: str, force_value: Optional[str] = None) -> str:
     """Ask for an email address with basic validation."""
     if force_value:
@@ -1906,7 +1909,7 @@ def prompt_email(question: str, force_value: Optional[str] = None) -> str:
         except EOFError:
             print_error("No email provided (stdin closed).")
             sys.exit(2)
-        if re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
+        if re.match(EMAIL_PATTERN, email):
             return email
         print("Please enter a valid email address.")
 
@@ -5184,6 +5187,11 @@ def parse_args():
         args.no_delegates = True
         args.no_auto_reply = True
 
+    # --user names the log file, so a value the prompt would refuse (":", "*")
+    # used to surface as a traceback from the log file open (OFF-24).
+    if args.user and not re.match(EMAIL_PATTERN, args.user):
+        parser.error(f"--user {args.user!r} is not an email address.")
+
     # An account that starts suspended is restored to suspended at the end;
     # asking for both is asking for two opposite end states. (Gavin-X, PR #7.)
     if args.unsuspend and args.no_suspend:
@@ -5269,8 +5277,13 @@ def main():
 
     # Capture start timestamp once so log and snapshot filenames match
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_dir = Path(args.log_dir) if args.log_dir else Path("./logs")
-    logger = setup_logging(log_dir, user_email, run_timestamp)
+    log_dir = Path(args.log_dir).expanduser() if args.log_dir else Path("./logs")
+    try:
+        logger = setup_logging(log_dir, user_email, run_timestamp)
+    except OSError as e:
+        print_error(f"Cannot write the log file in {log_dir}: {e}. "
+                    f"Point --log-dir at a writable folder.")
+        sys.exit(2)
 
     print_header(f"GOOGLE WORKSPACE OFFBOARDING v{SCRIPT_VERSION}")
     print_info(f"Platform: {sys.platform}")

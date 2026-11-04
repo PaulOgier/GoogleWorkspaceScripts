@@ -2302,6 +2302,10 @@ class TestArgParsing(OffboardTestCase):
             self._parse(*argv)
         self.assertEqual(cm.exception.code, 2, " ".join(argv))
 
+    def test_a_user_that_is_not_an_address_is_a_usage_error(self):
+        """OFF-24: it reached the log file open and raised a traceback."""
+        self._usage_error("--user", "a:b*c@x.com")
+
     def test_flags_that_would_be_ignored_are_usage_errors(self):
         """OFF-23: each of these was accepted and did nothing."""
         reuse = ("--reuse-email-backup", "/b", "--email-to", D)
@@ -2366,6 +2370,23 @@ class TestArgParsing(OffboardTestCase):
         for flag in ("no_drive", "no_email", "no_alias", "no_calendar",
                      "no_forward", "no_delegates", "no_auto_reply"):
             self.assertTrue(getattr(args, flag), flag)
+
+    def test_unwritable_log_dir_exits_2_without_a_traceback(self):
+        """OFF-24: the log-file open was unguarded. The child's PATH holds
+        only the Python directory, so it cannot find gam, gyb or rclone."""
+        with real_subprocess(), tempfile.TemporaryDirectory() as tmp:
+            blocker = Path(tmp) / "not-a-dir"
+            blocker.write_text("x", encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH), "--user", U,
+                 "--log-dir", str(blocker / "logs")],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                cwd=tmp, timeout=60,
+                env={"PATH": str(Path(sys.executable).parent)},
+            )
+        self.assertNotIn("Traceback", result.stderr, result.stderr)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--log-dir", result.stdout + result.stderr)
 
     def test_eof_at_the_user_prompt_exits_cleanly(self):
         """Was A3_1: the only test that runs the script for real; it exits
