@@ -1754,24 +1754,13 @@ class Checker:
         own = [j for j, t in enumerate(raw) if t in ('<<', '<<-')]
         # a substitution naming python chose the program: $(which python3) <<'EOF' reaches here as '<< EOF'
         # after a segment holding python3, `which python3` - <<'EOF' as '`which' 'python3`' '-'
-        # Fails closed: a substitution that names python or holds anything chosen at runtime ($PY, a nested
-        # substitution) is CANNOT TELL; only an all-literal one naming another program (`date`) is read on
-        if docs and own:
-            sub = None
-            if k < len(seg) and '$(' in seg[k]:
-                sub = []  # a quoted substitution kept as one word ("$(which python3)"): nothing to read
-            elif k < len(seg) and seg[k].startswith('`'):
-                # "`which python3`" arrives as one word, `which python3` as two
-                tick = next((j for j in range(k, len(seg)) if seg[j].endswith('`') and (j > k or len(seg[j]) > 1)), k)
-                # the words after it too: `true` python3 - expands to nothing, leaving python3 as the program
-                end = next((j for j in range(tick + 1, len(seg)) if seg[j].startswith('-')), len(seg))
-                sub = [w for t in seg[k:end] for w in t.strip('`').split()]
-            elif k >= len(seg) or seg[k].startswith('-'):
-                # the outermost $( on the line, so a nested one ($(printf python3; echo $(true))) hides nothing
-                opener = next((j for j in range(len(prev)) if prev[j][-1:] == ['$']), None)
-                sub = None if opener is None else [t for s in prev[opener + 1:] for t in s]
-            if sub is not None and (not sub or any(is_py(t) or '$' in t or '`' in t for t in sub)):
-                return 'the program reading this heredoc is chosen at runtime'
+        # Fails closed: a substitution choosing the program is CANNOT TELL whatever it holds, since what it
+        # expands to is runtime ("$(which python3)" -, `true` timeout -k 5 python3 -). Unquoted $(...) is split
+        # off as earlier segments, leaving '- << EOF' or '<< EOF' here; words after it are read as usual.
+        if docs and own and k < len(seg) and ('$(' in seg[k] or seg[k].startswith('`')):
+            return 'the program reading this heredoc is chosen at runtime'
+        if docs and own and (k >= len(seg) or seg[k].startswith('-')) and any(p[-1:] == ['$'] for p in prev):
+            return 'the program reading this heredoc is chosen at runtime'
         if not docs or not own or k >= len(seg) or not is_py(seg[k]):
             return None
         args = seg[k + 1:]

@@ -738,7 +738,7 @@ AUDIT_2026_11 += [
     ('gam info domain\n$(command -v python3) - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n`which python3` - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n$(which python3) <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
-    ('gam info domain\n`which sudo` tee x <<EOF\nhello\nEOF\n`date` <<EOF\nhi\nEOF', 'shell', g.READ, 'exact'),
+    ('gam info domain\n`true` timeout -k 5 python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n"$(which python3)" - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n"`which python3`" <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
     ('gam info domain\n`true` python3 - <<\'EOF\'\nimport subprocess\nsubprocess.run(["gam", "delete", "user", "bob@example.com"])\nEOF', 'shell', g.UNKNOWN, 'floor'),
